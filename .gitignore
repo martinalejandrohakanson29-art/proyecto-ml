@@ -1,0 +1,55 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn.lock
+package-lock.json
+
+# Build / cache
+dist/
+build/
+.cache/
+coverage/
+
+# Variables y credenciales locales
+.env
+.env.*
+credentials/
+*.pem
+*.p12
+*.key
+*.crt
+*.der
+
+# SO/editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+logs/
+*.log
+
+# Exportaciones / archivos generados por tu app
+salida/
+
+# Entornos locales adicionales
+.env.local
+.env.development.local
+.env.production.local
+.env.test.local
+.npmrc
+
+# Vercel / Next (por si más adelante los usás)
+.vercel/
+.next/
+.turbo/
+.eslintcache
+
+# Misceláneos
+tmp/
+*.tmp
+*.bak
+*.swp
+.history/
+
