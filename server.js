@@ -1,7 +1,6 @@
-// // server.js
+// server.js (FAST)
 import 'dotenv/config';
 import express from 'express';
-import dayjs from 'dayjs';
 import fs from 'node:fs';
 import { google } from 'googleapis';
 import axios from 'axios';
@@ -18,372 +17,268 @@ import { summarizePayments } from './src/services/payments.js';
 import { HEADERS } from './src/utils/columns.js';
 import { mapOrderToGridRow } from './src/utils/mapOrder.js';
 
-// --- impuesto desde Mercado Pago (suma charges_details.type === "tax") ---
-async function computeTaxesFromMercadoPago(payments = []) {
-  const mpToken = process.env.MP_ACCESS_TOKEN;
-  if (!mpToken) return null; // si no hay token, no hacemos nada
-
-  let totalTaxes = 0;
-
-  for (const p of payments) {
-    const paymentId = p?.id;
-    if (!paymentId) continue;
-
-    try {
-      const r = await axios.get(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-        headers: { Authorization: `Bearer ${mpToken}` },
-        timeout: 10000,
-      });
-
-      const charges = r.data?.charges_details || [];
-      for (const ch of charges) {
-        if (ch?.type === 'tax') {
-          const amt =
-            ch?.amounts?.original ??
-            ch?.amounts?.payer ??
-            ch?.amounts?.collector ??
-            ch?.amount ??
-            0;
-          totalTaxes += Number(amt) || 0;
-        }
-      }
-    } catch (e) {
-      console.warn('[mp/taxes] error pago', paymentId, e?.response?.status || e.message);
-    }
-  }
-
-  return totalTaxes;
-}
-
-// Log: ruta de credencial (única var)
-console.log('GAC =', process.env.GOOGLE_APPLICATION_CREDENTIALS);
-
 const app = express();
 app.use(express.json());
 app.use(express.static('public'));
 
+// ===== Config de performance / comportamiento =====
+const TZ_OFFSET = process.env.TZ_OFFSET || '-03:00';
+const DEFAULT_DATE_BY = (process.env.DEFAULT_DATE_BY || 'created').toLowerCase(); // created|paid|both
+const PAID_LOOKBACK_DAYS = Number(process.env.PAID_LOOKBACK_DAYS || 7);          // ventana hacia atrás p/paid
+const FETCH_PAYMENTS_DEFAULT = process.env.FETCH_PAYMENTS === 'true';            // off por defecto
+const ENABLE_MP_TAXES = process.env.ENABLE_MP_TAXES === 'true';                  // off por defecto
 
-
-// --- Candado para /debug ---
-const ADMIN_KEY = process.env.ADMIN_KEY || '';
-
-function requireAdmin(req, res, next) {
-  const key = req.query.key || req.get('x-admin-key'); // podés pasarla por ?key=... o header
-  if (!ADMIN_KEY || key !== ADMIN_KEY) {
-    return res.status(401).json({ error: 'unauthorized' });
-  }
-  next();
+// ===== Utilidades de fecha (AR -03:00) =====
+function dateWithOffset(raw, endOfDay) {
+  if (!raw) return null;
+  if (/[T]\d{2}:\d{2}/.test(raw) && /Z|[+\-]\d{2}:?\d{2}$/.test(raw)) return new Date(raw);
+  const m = /^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/.exec(raw);
+  let iso = raw;
+  if (m) iso = `${m[3]}-${m[2]}-${m[1]}`;
+  const time = endOfDay ? '23:59:59.999' : '00:00:00.000';
+  return new Date(`${iso}T${time}${TZ_OFFSET}`);
+}
+function parseRangeAR(q) {
+  const fromD = dateWithOffset(q.from, false);
+  const toD   = dateWithOffset(q.to ?? q.until, true);
+  return {
+    fromMs: fromD ? +fromD : Number.NEGATIVE_INFINITY,
+    toMs:   toD   ? +toD   : Number.POSITIVE_INFINITY,
+    fromISO: fromD ? fromD.toISOString() : undefined,
+    toISO:   toD   ? toD.toISOString()   : undefined,
+    fromYMD: fromD ? fromD.toISOString().slice(0,10) : '',
+    toYMD:   toD   ? toD.toISOString().slice(0,10)   : '',
+  };
 }
 
-// Aplicar el candado a todo /debug/*
+// Índice FECHA (para filas-array)
+const FECHA_IDX = Math.max(HEADERS.indexOf('FECHA'), 1);
+
+// Parser flexible (array/obj)
+function rowTimeMs(r) {
+  const TZ = TZ_OFFSET;
+  const P = (s) => {
+    if (!s) return NaN;
+    let str = String(s);
+    if (/T\d{2}:\d{2}/.test(str) && /Z|[+\-]\d{2}:\d{2}$/.test(str)) { const ms = Date.parse(str); return Number.isNaN(ms)?NaN:ms; }
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(str)) { const ms = Date.parse(str.replace(' ','T')+TZ); return Number.isNaN(ms)?NaN:ms; }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) { const ms = Date.parse(`${str}T00:00:00.000${TZ}`); return Number.isNaN(ms)?NaN:ms; }
+    const ms = Date.parse(str); return Number.isNaN(ms)?NaN:ms;
+  };
+  const c = Array.isArray(r) ? r[FECHA_IDX] : (r?.FECHA ?? r?.date ?? r?.date_created);
+  return P(c);
+}
+
+// ===== Impuestos (opcional) =====
+async function computeTaxesFromMercadoPago(payments = []) {
+  const mpToken = process.env.MP_ACCESS_TOKEN;
+  if (!mpToken) return null;
+  let totalTaxes = 0;
+  for (const p of payments) {
+    const paymentId = p?.id;
+    if (!paymentId) continue;
+    try {
+      const r = await axios.get(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+        headers: { Authorization: `Bearer ${mpToken}` }, timeout: 8000,
+      });
+      const charges = r.data?.charges_details || [];
+      for (const ch of charges) {
+        if (ch?.type === 'tax') {
+          const amt = ch?.amounts?.original ?? ch?.amounts?.payer ?? ch?.amounts?.collector ?? ch?.amount ?? 0;
+          totalTaxes += Number(amt) || 0;
+        }
+      }
+    } catch {}
+  }
+  return totalTaxes;
+}
+
+// Fecha de pago a partir de payments y/o date_closed
+function getPaidMs(order, payments = []) {
+  const cands = [];
+  for (const p of payments) {
+    const status = String(p?.status || '').toLowerCase();
+    const cand = p?.date_approved || p?.date_accredited || p?.date_created;
+    if ((status === 'approved' || status === 'accredited') && cand) {
+      const ms = Date.parse(cand);
+      if (!Number.isNaN(ms)) cands.push(ms);
+    }
+  }
+  if (order?.date_closed) {
+    const ms = Date.parse(order.date_closed);
+    if (!Number.isNaN(ms)) cands.push(ms);
+  }
+  return cands.length ? Math.min(...cands) : NaN;
+}
+
+// ===== Auth debug y Sheets =====
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
+function requireAdmin(req, res, next) {
+  const key = req.query.key || req.get('x-admin-key');
+  if (!ADMIN_KEY || key !== ADMIN_KEY) return res.status(401).json({ error: 'unauthorized' });
+  next();
+}
 app.use('/debug', requireAdmin);
 
-
-
-
-// =====================
-// Helpers Google Sheets + caches
-let _mlTokenCache = { value: null, exp: 0 };   // cache token ML (5 min)
-let _costsCache   = { map: {}, exp: 0 };       // cache costos     (5 min)
+let _mlTokenCache = { value: null, exp: 0 };
+let _costsCache   = { map: {}, exp: 0 };
 
 async function getSheetsClient() {
-  const keyFile =
-    process.env.GOOGLE_APPLICATION_CREDENTIALS || './credentials/service-account.json';
-  const auth = new google.auth.GoogleAuth({
-    keyFile,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-  });
+  const keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS || './credentials/service-account.json';
+  const auth = new google.auth.GoogleAuth({ keyFile, scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'] });
   const client = await auth.getClient();
   return google.sheets({ version: 'v4', auth: client });
 }
-
 async function getTokenFromSheetsCached() {
   const now = Date.now();
   if (_mlTokenCache.value && now < _mlTokenCache.exp) return _mlTokenCache.value;
-
   const sheets = await getSheetsClient();
-  const spreadsheetId =
-    process.env.GS_SHEET_ID || '1AUw7IrTmuODu_WrogVienkxfUzG12j5DfH4jbMFvas0';
+  const spreadsheetId = process.env.GS_SHEET_ID || '1AUw7IrTmuODu_WrogVienkxfUzG12j5DfH4jbMFvas0';
   const sheetName = process.env.GS_TOKENS_SHEET || 'Tokens';
   const cell = process.env.GS_TOKENS_CELL || 'A2';
-  const range = `${sheetName}!${cell}`;
-
-  const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range });
+  const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${sheetName}!${cell}` });
   const token = resp.data.values?.[0]?.[0] || '';
-
   _mlTokenCache = { value: token, exp: now + 5 * 60 * 1000 };
   return token;
 }
-
-// === Costos desde "Comparador" (A=item_id, M=costo) con parseo robusto ===
 async function getCostsMapFromSheetsCached() {
   const now = Date.now();
   if (_costsCache.map && now < _costsCache.exp) return _costsCache.map;
-
   const sheets = await getSheetsClient();
-  const spreadsheetId =
-    process.env.GS_SHEET_ID || '1AUw7IrTmuODu_WrogVienkxfUzG12j5DfH4jbMFvas0';
-
+  const spreadsheetId = process.env.GS_SHEET_ID || '1AUw7IrTmuODu_WrogVienkxfUzG12j5DfH4jbMFvas0';
   const sheetName = process.env.GS_COSTS_SHEET || 'Comparador';
-  const range = `${sheetName}!A2:M`; // Col A..M (A=0 ... M=12)
-
-  const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range });
+  const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${sheetName}!A2:M` });
   const rows = resp.data.values || [];
-
   const map = {};
   for (const row of rows) {
-    const id = (row[0] || '').trim();   // A = ITEM_ID de publicación
-    const costRaw = row[12];            // M = costo unitario
+    const id = (row[0] || '').trim();
+    const costRaw = row[12];
     if (!id) continue;
-
-    const cleaned = String(costRaw ?? '')
-      .replace(/\s+/g, '')
-      .replace(/[^\d,.\-]/g, '')
-      .replace(/\./g, '')
-      .replace(',', '.');
-
+    const cleaned = String(costRaw ?? '').replace(/\s+/g,'').replace(/[^\d,.\-]/g,'').replace(/\./g,'').replace(',', '.');
     const cost = Number(cleaned);
-    if (!Number.isFinite(cost)) continue;
-
-    map[id] = cost;
+    if (Number.isFinite(cost)) map[id] = cost;
   }
-
   _costsCache = { map, exp: now + 5 * 60 * 1000 };
   return map;
 }
-// =====================
 
-// Ruta raíz informativa
-app.get('/', (_req, res) => {
-  res
-    .type('text')
-    .send('API ML OK. Endpoints: /health, /orders, /debug/creds, /debug/token, /debug/ml, /debug/orders_raw, /debug/costs, /debug/costs_raw, /debug/missing_costs');
-});
+// ===== Búsqueda por ID o Pack (paralelizada) =====
+async function fetchOrdersByIdsOrPacks(ids = [], sellerId, token) {
+  const out = new Map();
+  await Promise.all(ids.map(async raw => {
+    const id = String(raw || '').trim();
+    if (!id) return;
 
-// Healthcheck
-app.get('/health', (_req, res) => res.json({ ok: true }));
+    const tryOrder = axios.get(`https://api.mercadolibre.com/orders/${id}`, {
+      headers: { Authorization: `Bearer ${token}` }, timeout: 7000,
+    }).catch(() => null);
 
-// ---------- Debug helpers ----------
-app.get('/debug/creds', (_req, res) => {
-  try {
-    const keyPath =
-      process.env.GOOGLE_APPLICATION_CREDENTIALS || './credentials/service-account.json';
-    const fileExists = fs.existsSync(keyPath);
-    res.json({ keyPath, fileExists });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+    const tryPack = axios.get(
+      `https://api.mercadolibre.com/orders/search?seller=${sellerId}&pack_id=${encodeURIComponent(id)}&limit=50&offset=0`,
+      { headers: { Authorization: `Bearer ${token}` }, timeout: 7000 }
+    ).catch(() => null);
 
+    const [ro, rp] = await Promise.all([tryOrder, tryPack]);
+
+    if (ro?.data?.id) out.set(ro.data.id, ro.data);
+    const results = rp?.data?.results || [];
+    for (const o of results) if (o?.id) out.set(o.id, o);
+  }));
+  return Array.from(out.values());
+}
+
+// ===== Rutas =====
+app.get('/', (_req, res) => res.type('text').send('API ML OK. Endpoints: /orders, /orders.csv, /debug/token'));
 app.get('/debug/token', async (_req, res) => {
   try {
     const token = await getTokenFromSheetsCached();
-    res.json({
-      ok: true,
-      tokenLength: token.length,
-      preview: token ? token.slice(0, 12) + '...' : '',
-    });
-  } catch (e) {
-    console.error('[debug] error /debug/token:', e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
+    res.json({ ok: true, tokenLength: token.length, preview: token ? token.slice(0,12)+'...' : '' });
+  } catch (e) { res.status(500).json({ ok:false, error: e.message }); }
 });
 
-app.get('/debug/ml', async (_req, res) => {
-  try {
-    const token = await getTokenFromSheetsCached();
-    if (!token) return res.status(400).json({ ok: false, error: 'Token vacío en la hoja' });
-
-    const r = await axios.get('https://api.mercadolibre.com/users/me', {
-      headers: { Authorization: `Bearer ${token}` },
-      timeout: 10000,
-    });
-
-    const { id, nickname, site_id, status } = r.data || {};
-    res.json({ ok: true, id, nickname, site_id, status });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e?.response?.data || e.message });
-  }
-});
-
-app.get('/debug/orders_raw', async (req, res) => {
-  try {
-    const token = await getTokenFromSheetsCached();
-    setMeliToken(token);
-
-    const { from, to } = req.query;
-    const start = from ? dayjs(from).startOf('day') : dayjs().startOf('day');
-    const end   = to   ? dayjs(to).endOf('day')   : dayjs().endOf('day');
-
-    const fromISO = start.toDate().toISOString();
-    const toISO   = end.toDate().toISOString();
-
-    const sellerId = await getUserId();
-    const { data } = await searchOrdersByDate({
-      sellerId,
-      fromISO,
-      toISO,
-      limit: 5,
-      offset: 0,
-    });
-
-    const ordersRaw = data?.results || [];
-    const orders = ordersRaw.filter(o => o?.status !== 'cancelled');
-
-    return res.json({
-      ok: true,
-      count: orders.length,
-      sample: orders.slice(0, 2),
-    });
-  } catch (e) {
-    console.error('[debug] /orders_raw error:', e?.response?.data || e.message);
-    res.status(500).json({ ok: false, error: e?.response?.data || e.message });
-  }
-});
-
-// Inspección cruda de la hoja de costos: A..M + parseo
-app.get('/debug/costs_raw', async (_req, res) => {
-  try {
-    const sheets = await getSheetsClient();
-    const spreadsheetId =
-      process.env.GS_SHEET_ID || '1AUw7IrTmuODu_WrogVienkxfUzG12j5DfH4jbMFvas0';
-    const sheetName = process.env.GS_COSTS_SHEET || 'Comparador';
-
-    const range = `${sheetName}!A1:M50`;
-    const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range });
-    const rows = resp.data.values || [];
-
-    const normalizeCost = (v) => {
-      const raw = String(v ?? '');
-      const cleaned = raw
-        .replace(/\s+/g, '')
-        .replace(/[^\d,.\-]/g, '')
-        .replace(/\./g, '')
-        .replace(',', '.');
-      const num = Number(cleaned);
-      return { raw, cleaned, num: Number.isFinite(num) ? num : 0 };
-    };
-
-    const preview = rows.map((r, i) => {
-      const A = r[0] ?? null;     // ITEM_ID
-      const M = r[12] ?? null;    // COSTO
-      const parsed = normalizeCost(M);
-      return { row: i + 1, A, M, parsed };
-    });
-
-    res.json({ ok: true, sheet: sheetName, rows: preview });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e?.message || String(e) });
-  }
-});
-
-// Ver costos leídos desde "Comparador" (A=item_id, M=costo)
-app.get('/debug/costs', async (_req, res) => {
-  try {
-    const map = await getCostsMapFromSheetsCached();
-    const entries = Object.entries(map);
-    res.json({
-      ok: true,
-      count: entries.length,
-      sample: entries.slice(0, 5),
-    });
-  } catch (e) {
-    console.error('[debug] /debug/costs error:', e);
-    res.status(500).json({ ok: false, error: e?.message || String(e) });
-  }
-});
-
-// Detecta publicaciones sin costo en la hoja "Comparador"
-app.get('/debug/missing_costs', async (req, res) => {
-  try {
-    const token = await getTokenFromSheetsCached();
-    setMeliToken(token);
-    const costsMap = await getCostsMapFromSheetsCached();
-
-    const { from, to, pageSize = '50', maxPages = '5' } = req.query;
-    const start = from ? dayjs(from).startOf('day') : dayjs().startOf('day');
-    const end   = to   ? dayjs(to).endOf('day')   : dayjs().endOf('day');
-    const fromISO = start.toDate().toISOString();
-    const toISO   = end.toDate().toISOString();
-
-    const sellerId = await getUserId();
-    const limitPage = Math.min(parseInt(pageSize, 10), 50);
-    const pages     = Math.min(parseInt(maxPages, 10), 50);
-
-    const missing = new Map();
-    let offset = 0;
-
-    for (let i = 0; i < pages; i++) {
-      const { data } = await searchOrdersByDate({
-        sellerId,
-        fromISO,
-        toISO,
-        limit: limitPage,
-        offset,
-      });
-
-      const raw = data?.results || [];
-      const orders = raw.filter(o => o?.status !== 'cancelled');
-      if (!raw.length) break;
-
-      for (const order of orders) {
-        const it = order?.order_items?.[0];
-        const itemId = it?.item?.id;
-        const title  = it?.item?.title || null;
-        if (itemId && costsMap[itemId] == null && !missing.has(itemId)) {
-          missing.set(itemId, title);
-        }
-      }
-
-      if (raw.length < limitPage) break;
-      offset += limitPage;
-    }
-
-    res.json({
-      ok: true,
-      from: start.format('YYYY-MM-DD'),
-      to: end.format('YYYY-MM-DD'),
-      missingCount: missing.size,
-      missing: Array.from(missing.entries())
-        .map(([id, title]) => ({ id, title }))
-        .slice(0, 200),
-      note: 'Cargá estos item_id en Comparador!A (y su costo en M) para completar COSTO y GANANCIA.',
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e?.response?.data || e.message });
-  }
-});
-// -----------------------------------
-
-// ========= Endpoint principal: /orders =========
-/**
- * GET /orders
- * Query:
- *  from=YYYY-MM-DD   (ARG local) | default: hoy 00:00
- *  to=YYYY-MM-DD     (ARG local) | default: hoy 23:59:59
- *  pageSize=50                    | máx ML 50
- *  maxPages=20                    | páginas a iterar
- *  includeShipment=true|false     | si consulta /shipments/{id} por orden
- */
+// ====== /orders ======
 app.get('/orders', async (req, res) => {
   try {
     const token = await getTokenFromSheetsCached();
     setMeliToken(token);
-
     const costsMap = await getCostsMapFromSheetsCached();
 
-    const { from, to, pageSize, maxPages, includeShipment } = req.query;
+    // Modo (rápido por defecto = created)
+    const rawMode = String(req.query.dateBy || req.query.mode || DEFAULT_DATE_BY).toLowerCase();
+    const dateBy = (rawMode === 'created' || rawMode === 'paid' || rawMode === 'both') ? rawMode : DEFAULT_DATE_BY;
 
-    const start = from ? dayjs(from).startOf('day') : dayjs().startOf('day');
-    const end = to ? dayjs(to).endOf('day') : dayjs().endOf('day');
+    const { fromISO, toISO, fromMs, toMs, fromYMD, toYMD } = parseRangeAR(req.query);
 
-    const fromISO = start.toDate().toISOString();
-    const toISO = end.toDate().toISOString();
+    // Si el modo usa pago (paid/both) ampliamos un poquito la ventana (lookback)
+    const paidLookbackDays = Number(req.query.paidLookbackDays || PAID_LOOKBACK_DAYS);
+    let searchFromISO = fromISO, searchToISO = toISO;
+    if (dateBy !== 'created') {
+      const lookbackMs = paidLookbackDays * 24 * 60 * 60 * 1000;
+      searchFromISO = new Date(fromMs - lookbackMs).toISOString();
+      searchToISO   = new Date(toMs).toISOString();
+    }
 
-    const limitPage = Math.min(parseInt(pageSize || '50', 10), 50);
-    const pages = Math.min(parseInt(maxPages || '20', 10), 200);
+    const includeShipment = req.query.includeShipment === 'true';
+    const fetchPayments = req.query.fetchPayments === 'true' || FETCH_PAYMENTS_DEFAULT;
 
-    const sellerId = await getUserId();
+    // --- Búsqueda por IDs (order/pack) ---
+    const idsList = String(req.query.id || req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (idsList.length) {
+      const sellerId = await getUserId();
+      const baseOrders = await fetchOrdersByIdsOrPacks(idsList, sellerId, token);
+      const orders = baseOrders.filter(o => o?.status !== 'cancelled');
+
+      const batch = await Promise.all(orders.map(order => limit(async () => {
+        // Filtro “barato” primero: creation y paid usando date_closed + order.payments
+        const createdMs = Date.parse(order?.date_created);
+        let payments = order?.payments || [];
+        let paidMs = getPaidMs(order, payments);
+
+        // Si estoy filtrando por pago y aún no tengo fecha, opcionalmente pego a la API
+        if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
+          try { payments = await getOrderPayments(order.id); } catch {}
+          paidMs = getPaidMs(order, payments);
+        }
+
+        let inRange;
+        if (dateBy === 'created') {
+          inRange = Number.isFinite(createdMs) && createdMs >= fromMs && createdMs <= toMs;
+        } else if (dateBy === 'paid') {
+          inRange = Number.isFinite(paidMs) && paidMs >= fromMs && paidMs <= toMs;
+        } else {
+          const createdIn = Number.isFinite(createdMs) && createdMs >= fromMs && createdMs <= toMs;
+          const paidIn    = Number.isFinite(paidMs)    && paidMs    >= fromMs && paidMs    <= toMs;
+          inRange = createdIn || paidIn;
+        }
+        if (!inRange) return null;
+
+        // Impuestos MP (opcional)
+        let taxesFromMp = null;
+        if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
+          try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
+        }
+
+        // Envío (opcional)
+        let shipmentData = null;
+        const shipmentId = order?.shipping?.id || order?.order_items?.[0]?.shipping?.id;
+        if (includeShipment && shipmentId) { try { shipmentData = await getShipment(shipmentId); } catch {} }
+
+        return mapOrderToGridRow(
+          { ...order, _taxesFromMP: taxesFromMp },
+          summarizePayments(payments),
+          shipmentData,
+          costsMap
+        );
+      })));
+
+      const rows = batch.filter(Boolean);
+      return res.json({ from: fromYMD, to: toYMD, dateBy, count: rows.length, headers: HEADERS, rows, note: 'by id/pack' });
+    }
+
+    // --- Búsqueda por fecha (paginada) ---
+    const limitPage = Math.min(parseInt(req.query.pageSize || '50', 10), 50);
+    const pages     = Math.min(parseInt(req.query.maxPages || '20', 10), 200);
+    const sellerId  = await getUserId();
 
     let offset = 0;
     const rows = [];
@@ -391,8 +286,8 @@ app.get('/orders', async (req, res) => {
     for (let i = 0; i < pages; i++) {
       const { data } = await searchOrdersByDate({
         sellerId,
-        fromISO,
-        toISO,
+        fromISO: searchFromISO,
+        toISO: searchToISO,
         limit: limitPage,
         offset,
       });
@@ -401,97 +296,154 @@ app.get('/orders', async (req, res) => {
       const orders = raw.filter(o => o?.status !== 'cancelled');
       if (!raw.length) break;
 
-      const batch = await Promise.all(
-        orders.map((order) =>
-          limit(async () => {
-            // Pagos
-            let payments = [];
-            try {
-              payments = await getOrderPayments(order.id);
-            } catch (e) {
-              if (e?.response?.status === 403) {
-                payments = order?.payments || [];
-                console.warn(
-                  '[payments] 403 en /orders/{id}/payments. Usando order.payments como fallback.',
-                  { orderId: order?.id, fallbackCount: payments?.length || 0 }
-                );
-              } else {
-                throw e;
-              }
-            }
+      const batch = await Promise.all(orders.map(order => limit(async () => {
+        const createdMs = Date.parse(order?.date_created);
 
-            // Impuestos desde MP
-            let taxesFromMp = null;
-            try {
-              taxesFromMp = await computeTaxesFromMercadoPago(payments);
-            } catch {}
+        // Primero intentamos con info local (rápido)
+        let payments = order?.payments || [];
+        let paidMs = (dateBy !== 'created') ? getPaidMs(order, payments) : NaN;
 
-            // Envío (si se pidió)
-            let shipmentData = null;
-            const shipmentId = order?.shipping?.id || order?.order_items?.[0]?.shipping?.id;
-            if (includeShipment === 'true' && shipmentId) {
-              try {
-                shipmentData = await getShipment(shipmentId);
-              } catch {}
-            }
+        // Si necesito pago y no lo tengo, sólo entonces puedo ir a la API (si lo pedís)
+        if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
+          try { payments = await getOrderPayments(order.id); } catch {}
+          paidMs = getPaidMs(order, payments);
+        }
 
-            // Pasamos _taxesFromMP para que el mapper lo use si está presente
-            return mapOrderToGridRow(
-              { ...order, _taxesFromMP: taxesFromMp },
-              summarizePayments(payments),
-              shipmentData,
-              costsMap
-            );
-          })
-        )
-      );
+        // Decidir inclusión
+        let inRange;
+        if (dateBy === 'created') {
+          inRange = Number.isFinite(createdMs) && createdMs >= fromMs && createdMs <= toMs;
+        } else if (dateBy === 'paid') {
+          inRange = Number.isFinite(paidMs) && paidMs >= fromMs && paidMs <= toMs;
+        } else {
+          const createdIn = Number.isFinite(createdMs) && createdMs >= fromMs && createdMs <= toMs;
+          const paidIn    = Number.isFinite(paidMs)    && paidMs    >= fromMs && paidMs    <= toMs;
+          inRange = createdIn || paidIn;
+        }
+        if (!inRange) return null;
 
-      rows.push(...batch);
+        // Impuestos MP (opcional)
+        let taxesFromMp = null;
+        if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
+          try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
+        }
 
-      if (raw.length < limitPage) break;  // <-- clave: usar raw
+        // Envío (opcional)
+        let shipmentData = null;
+        const shipmentId = order?.shipping?.id || order?.order_items?.[0]?.shipping?.id;
+        if (includeShipment && shipmentId) { try { shipmentData = await getShipment(shipmentId); } catch {} }
+
+        return mapOrderToGridRow(
+          { ...order, _taxesFromMP: taxesFromMp },
+          summarizePayments(payments),
+          shipmentData,
+          costsMap
+        );
+      })));
+
+      rows.push(...batch.filter(Boolean));
+      if (raw.length < limitPage) break;
       offset += limitPage;
     }
 
-    res.json({
-      from: start.format('YYYY-MM-DD'),
-      to: end.format('YYYY-MM-DD'),
-      count: rows.length,
-      headers: HEADERS,
-      rows,
-    });
+    res.json({ from: fromYMD, to: toYMD, dateBy, count: rows.length, headers: HEADERS, rows });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err?.message || 'Internal error' });
   }
 });
 
-// Exporta las órdenes a CSV
+// ====== /orders.csv ======
 app.get('/orders.csv', async (req, res) => {
   try {
     const token = await getTokenFromSheetsCached();
     setMeliToken(token);
     const costsMap = await getCostsMapFromSheetsCached();
 
-    const { from, to, pageSize, maxPages, includeShipment } = req.query;
-    const start = from ? dayjs(from).startOf('day') : dayjs().startOf('day');
-    const end   = to   ? dayjs(to).endOf('day')   : dayjs().endOf('day');
+    const rawMode = String(req.query.dateBy || req.query.mode || DEFAULT_DATE_BY).toLowerCase();
+    const dateBy = (rawMode === 'created' || rawMode === 'paid' || rawMode === 'both') ? rawMode : DEFAULT_DATE_BY;
+    const { fromISO, toISO, fromMs, toMs, fromYMD, toYMD } = parseRangeAR(req.query);
 
-    const fromISO = start.toDate().toISOString();
-    const toISO   = end.toDate().toISOString();
+    const paidLookbackDays = Number(req.query.paidLookbackDays || PAID_LOOKBACK_DAYS);
+    let searchFromISO = fromISO, searchToISO = toISO;
+    if (dateBy !== 'created') {
+      const lookbackMs = paidLookbackDays * 24 * 60 * 60 * 1000;
+      searchFromISO = new Date(fromMs - lookbackMs).toISOString();
+      searchToISO   = new Date(toMs).toISOString();
+    }
 
-    const limitPage = Math.min(parseInt(pageSize || '50', 10), 50);
-    const pages     = Math.min(parseInt(maxPages || '20', 10), 200);
+    const includeShipment = req.query.includeShipment === 'true';
+    const fetchPayments = req.query.fetchPayments === 'true' || FETCH_PAYMENTS_DEFAULT;
 
-    const sellerId = await getUserId();
+    const sellerId  = await getUserId();
+    const limitPage = Math.min(parseInt(req.query.pageSize || '50', 10), 50);
+    const pages     = Math.min(parseInt(req.query.maxPages || '20', 10), 200);
 
+    const esc = (v) => { if (v == null) v = ''; const s = String(v).replace(/"/g,'""'); return `"${s}"`; };
+
+    // Rama por IDs
+    const idsList = String(req.query.id || req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (idsList.length) {
+      const baseOrders = await fetchOrdersByIdsOrPacks(idsList, sellerId, token);
+      const orders = baseOrders.filter(o => o?.status !== 'cancelled');
+
+      const batch = await Promise.all(orders.map(order => limit(async () => {
+        const createdMs = Date.parse(order?.date_created);
+        let payments = order?.payments || [];
+        let paidMs = (dateBy !== 'created') ? getPaidMs(order, payments) : NaN;
+        if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
+          try { payments = await getOrderPayments(order.id); } catch {}
+          paidMs = getPaidMs(order, payments);
+        }
+        let inRange;
+        if (dateBy === 'created') inRange = Number.isFinite(createdMs) && createdMs >= fromMs && createdMs <= toMs;
+        else if (dateBy === 'paid') inRange = Number.isFinite(paidMs) && paidMs >= fromMs && paidMs <= toMs;
+        else {
+          const createdIn = Number.isFinite(createdMs) && createdMs >= fromMs && createdMs <= toMs;
+          const paidIn    = Number.isFinite(paidMs)    && paidMs    >= fromMs && paidMs    <= toMs;
+          inRange = createdIn || paidIn;
+        }
+        if (!inRange) return null;
+
+        let taxesFromMp = null;
+        if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
+          try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
+        }
+
+        let shipmentData = null;
+        const shipmentId = order?.shipping?.id || order?.order_items?.[0]?.shipping?.id;
+        if (includeShipment && shipmentId) { try { shipmentData = await getShipment(shipmentId); } catch {} }
+
+        return mapOrderToGridRow(
+          { ...order, _taxesFromMP: taxesFromMp },
+          summarizePayments(payments),
+          shipmentData,
+          costsMap
+        );
+      })));
+
+      const rows = batch.filter(Boolean);
+      const lines = [HEADERS.map(esc).join(',')];
+      for (const row of rows) {
+        const cells = row.map((v, idx) => (idx === 0 && v != null && v !== '') ? `="${String(v)}"` : esc(v));
+        lines.push(cells.join(','));
+      }
+      const csv = '\uFEFF' + lines.join('\r\n');
+      const fname = `orders_by_id_${idsList.join('-')}.csv`;
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+      return res.send(csv);
+    }
+
+    // Rama por fechas
     let offset = 0;
     const allRows = [];
 
     for (let i = 0; i < pages; i++) {
       const { data } = await searchOrdersByDate({
         sellerId,
-        fromISO,
-        toISO,
+        fromISO: searchFromISO,
+        toISO: searchToISO,
         limit: limitPage,
         offset,
       });
@@ -500,67 +452,54 @@ app.get('/orders.csv', async (req, res) => {
       const orders = raw.filter(o => o?.status !== 'cancelled');
       if (!raw.length) break;
 
-      const batch = await Promise.all(
-        orders.map(order =>
-          limit(async () => {
-            let payments = [];
-            try {
-              payments = await getOrderPayments(order.id);
-            } catch (e) {
-              if (e?.response?.status === 403) payments = order?.payments || [];
-              else throw e;
-            }
+      const batch = await Promise.all(orders.map(order => limit(async () => {
+        const createdMs = Date.parse(order?.date_created);
+        let payments = order?.payments || [];
+        let paidMs = (dateBy !== 'created') ? getPaidMs(order, payments) : NaN;
+        if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
+          try { payments = await getOrderPayments(order.id); } catch {}
+          paidMs = getPaidMs(order, payments);
+        }
+        let inRange;
+        if (dateBy === 'created') inRange = Number.isFinite(createdMs) && createdMs >= fromMs && createdMs <= toMs;
+        else if (dateBy === 'paid') inRange = Number.isFinite(paidMs) && paidMs >= fromMs && paidMs <= toMs;
+        else {
+          const createdIn = Number.isFinite(createdMs) && createdMs >= fromMs && createdMs <= toMs;
+          const paidIn    = Number.isFinite(paidMs)    && paidMs    >= fromMs && paidMs    <= toMs;
+          inRange = createdIn || paidIn;
+        }
+        if (!inRange) return null;
 
-            let taxesFromMp = null;
-            try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
+        let taxesFromMp = null;
+        if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
+          try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
+        }
 
-            let shipmentData = null;
-            const shipmentId = order?.shipping?.id || order?.order_items?.[0]?.shipping?.id;
-            if (includeShipment === 'true' && shipmentId) {
-              try { shipmentData = await getShipment(shipmentId); } catch {}
-            }
+        let shipmentData = null;
+        const shipmentId = order?.shipping?.id || order?.order_items?.[0]?.shipping?.id;
+        if (includeShipment && shipmentId) { try { shipmentData = await getShipment(shipmentId); } catch {} }
 
-            return mapOrderToGridRow(
-              { ...order, _taxesFromMP: taxesFromMp },
-              summarizePayments(payments),
-              shipmentData,
-              costsMap
-            );
-          })
-        )
-      );
+        return mapOrderToGridRow(
+          { ...order, _taxesFromMP: taxesFromMp },
+          summarizePayments(payments),
+          shipmentData,
+          costsMap
+        );
+      })));
 
-      allRows.push(...batch);
-
-      if (raw.length < limitPage) break;  // <-- clave: usar raw
+      allRows.push(...batch.filter(Boolean));
+      if (raw.length < limitPage) break;
       offset += limitPage;
     }
 
-    // CSV helpers (ID como texto y BOM UTF-8)
-    const headers = HEADERS;
-    const esc = (v) => {
-      if (v === null || v === undefined) v = '';
-      const s = String(v).replace(/"/g, '""');
-      return `"${s}"`;
-    };
-
-    const lines = [];
-    lines.push(headers.map(esc).join(','));
-
+    const esc2 = (v) => { if (v == null) v = ''; const s = String(v).replace(/"/g,'""'); return `"${s}"`; };
+    const lines = [HEADERS.map(esc2).join(',')];
     for (const row of allRows) {
-      const cells = row.map((v, idx) => {
-        if (idx === 0 && v !== null && v !== undefined && v !== '') {
-          return `="${String(v)}"`; // fuerza texto en Excel para ID
-        }
-        return esc(v);
-      });
+      const cells = row.map((v, idx) => (idx === 0 && v != null && v !== '') ? `="${String(v)}"` : esc2(v));
       lines.push(cells.join(','));
     }
-
-    const bom = '\uFEFF';
-    const csv = bom + lines.join('\r\n');
-
-    const fname = `orders_${start.format('YYYY-MM-DD')}_${end.format('YYYY-MM-DD')}.csv`;
+    const csv = '\uFEFF' + lines.join('\r\n');
+    const fname = `orders_${fromYMD}_${toYMD}_${dateBy}.csv`;
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
     res.send(csv);
@@ -570,49 +509,5 @@ app.get('/orders.csv', async (req, res) => {
   }
 });
 
-// Debug: inspeccionar impuestos de una orden puntual
-app.get('/debug/taxes', async (req, res) => {
-  try {
-    const { id } = req.query;
-    if (!id) return res.status(400).json({ ok: false, error: 'Falta ?id=ORDER_ID' });
-
-    const token = await getTokenFromSheetsCached();
-
-    const ord = await axios.get(`https://api.mercadolibre.com/orders/${id}`, {
-      headers: { Authorization: `Bearer ${token}` },
-      timeout: 10000,
-    });
-
-    let payments = [];
-    try {
-      const r = await axios.get(`https://api.mercadolibre.com/orders/${id}/payments`, {
-        headers: { Authorization: `Bearer ${token}` },
-        timeout: 10000,
-      });
-      payments = r.data || [];
-    } catch {
-      payments = ord.data?.payments || [];
-    }
-
-    const orderTaxes = {
-      order_taxes_amount: ord.data?.taxes?.amount ?? null,
-      order_taxes_obj: ord.data?.taxes ?? null,
-      payments_taxes_amounts: payments.map(p => p?.taxes_amount ?? null),
-      payments_taxes_raw: payments.map(p => ({
-        id: p?.id,
-        taxes_amount: p?.taxes_amount,
-        fee_details: p?.fee_details,
-      })),
-    };
-
-    res.json({ ok: true, order_id: id, orderTaxes, samplePayment: payments[0] || null });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e?.response?.data || e.message });
-  }
-});
-
 const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`ML backend listo en http://localhost:${port}`);
-});
-
+app.listen(port, () => console.log(`ML backend listo (rápido) en http://localhost:${port}`));
