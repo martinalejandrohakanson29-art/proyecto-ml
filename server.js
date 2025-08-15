@@ -63,6 +63,24 @@ app.use(express.json());
 app.use(express.static('public'));
 
 
+
+// --- Candado para /debug ---
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
+
+function requireAdmin(req, res, next) {
+  const key = req.query.key || req.get('x-admin-key'); // podés pasarla por ?key=... o header
+  if (!ADMIN_KEY || key !== ADMIN_KEY) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  next();
+}
+
+// Aplicar el candado a todo /debug/*
+app.use('/debug', requireAdmin);
+
+
+
+
 // =====================
 // Helpers Google Sheets + caches
 let _mlTokenCache = { value: null, exp: 0 };   // cache token ML (5 min)
