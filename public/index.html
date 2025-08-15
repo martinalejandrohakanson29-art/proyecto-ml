@@ -2,259 +2,250 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <title>Ventas ML</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ventas Mercado Libre</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     :root{
-      --bg:#0f172a; --panel:#111827; --text:#e5e7eb; --muted:#9ca3af;
-      --border:#1f2937; --row:#0b1220; --row-alt:#0e1727; --row-hover:#0f1c31;
+      --bg:#0f1623; --panel:#131c2b; --muted:#8ea3c2; --text:#e7eefc; --accent:#00c2a8; --line:#203049;
+      --red-rgb:220,61,82;      /* rojo fuerte */
+      --yellow-rgb:190,140,0;   /* ámbar */
+      --green-rgb:30,132,73;    /* verde */
+      --magenta-rgb:142,36,170; /* magenta */
     }
+    *{box-sizing:border-box}
     html,body{height:100%}
-    body{
-      margin:0;background:linear-gradient(180deg,var(--bg),#090f1d 40%,#070b16);
-      color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;
-      -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+    body{ margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell; background:var(--bg); color:var(--text); }
+    .wrap{max-width:1200px; margin:24px auto; padding:0 16px}
+    .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.25)}
+    .hdr{padding:16px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap}
+    .hdr h1{font-size:18px; margin:0; letter-spacing:.2px}
+    .controls{display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap}
+    label{font-size:12px; color:var(--muted)}
+    input,select,button,.btn{
+      height:36px; border-radius:10px; border:1px solid var(--line); background:#0f1a2b; color:var(--text);
+      padding:0 10px; outline:none;
     }
-    .wrap{max-width:1200px;margin:24px auto;padding:0 16px}
-    .card{
-      background:linear-gradient(180deg,rgba(30,58,138,.25),rgba(17,24,39,.6));
-      border:1px solid var(--border);border-radius:16px;overflow:hidden;
-      box-shadow:0 10px 30px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.05);
-    }
-    .card-header{
-      display:flex;align-items:center;gap:12px;flex-wrap:wrap;
-      padding:16px;border-bottom:1px solid var(--border);
-      background:linear-gradient(180deg,rgba(2,6,23,.9),rgba(2,6,23,.5));
-    }
-    .title{font-weight:700;color:#fff;margin-right:auto}
-    label{font-size:12px;color:var(--muted)}
-    input[type="date"]{
-      background:#0b1220;color:#fff;border:1px solid var(--border);
-      border-radius:10px;padding:8px 10px;outline:none
-    }
-    .btn{
-      background:linear-gradient(90deg,#22c55e,#06b6d4);
-      color:#001018;font-weight:700;border:0;border-radius:12px;
-      padding:10px 14px;cursor:pointer;box-shadow:0 6px 16px rgba(0,0,0,.3);
-    }
-    .btn.secondary{background:transparent;color:#9bd2ff;border:1px solid #2460b3}
-    .meta{font-size:12px;color:#bcd7ff}
+    input[type="date"]{padding:0 8px}
+    button,.btn{cursor:pointer; background:var(--accent); color:#001813; border:none; font-weight:600}
+    .btn.secondary{background:#1b2b46; color:var(--text); border:1px solid var(--line)}
+    .meta{font-size:12px; color:var(--muted)}
 
-    .table-wrap{overflow:auto;max-height:70vh;border-top:1px solid var(--border)}
-    table{
-      width:100%;border-collapse:separate;border-spacing:0;
-      table-layout:fixed; /* NECESARIO para que el resize funcione */
-    }
-    thead th{
-      position:sticky;top:0; /* pegado al tope del contenedor que scrollea */
-      background:linear-gradient(180deg,rgba(18,28,48,.95),rgba(9,14,26,.95));
-      border-bottom:1px solid var(--border);
-      padding:10px 12px;font-size:12px;font-weight:700;color:#9bd2ff;
-      text-align:left;white-space:nowrap;vertical-align:bottom;
-      z-index:2;
-    }
-    tbody td{
-      border-bottom:1px dashed #0e213f;padding:10px 12px;font-size:13px;color:#e6f0ff;
-      white-space:nowrap;vertical-align:top;overflow:hidden;text-overflow:ellipsis;
-    }
-    tbody tr:nth-child(odd){background:linear-gradient(180deg,#0b1220,#0c1425)}
-    tbody tr:nth-child(even){background:linear-gradient(180deg,#0c1425,#0d1628)}
-    tbody tr:hover{background:linear-gradient(180deg,#0f1c31,#132542)}
+    .tbl{width:100%; border-collapse:collapse}
+    .tbl th,.tbl td{padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap; font-size:13px}
+    .tbl th{position:sticky; top:0; background:var(--panel); z-index:2; text-align:left; font-weight:600; color:#cfe2ff}
+    .tbl td:nth-child(3){max-width:420px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+    .tbl thead tr{box-shadow:0 2px 0 0 var(--line)}
+    .scroller{max-height:58vh; overflow:auto}
 
-    .th-wrap{position:relative;display:flex;align-items:center;gap:8px}
-    .col-resizer{
-      position:absolute;top:0;right:0;height:100%;width:8px;cursor:col-resize;
-      user-select:none;background:linear-gradient(180deg,transparent,transparent);
+    .totalsbar{display:flex; gap:12px; padding:12px 18px; border-bottom:1px solid var(--line); align-items:center; flex-wrap:wrap}
+    .tbox{display:flex; flex-direction:column; gap:6px}
+    .tbox label{font-size:12px; color:var(--muted)}
+    .tbox input{
+      height:40px; min-width:190px; background:#0f1a2b; color:var(--text);
+      border-radius:10px; border:1px solid var(--line); padding:0 12px; font-weight:700; letter-spacing:.2px;
     }
-    .col-resizer:hover{background:linear-gradient(180deg,transparent,rgba(96,165,250,.08),transparent)}
-    body.resizing{cursor:col-resize;user-select:none}
-    .num{text-align:right}
-    .idcell{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace}
+    .tbox.small input{min-width:160px}
+
+    /* colores intensos para % ganancia */
+    .lvl-red{     background-color: rgba(var(--red-rgb), .55) !important;     border:1px solid rgba(var(--red-rgb), .9) !important;     color:#fff !important; }
+    .lvl-yellow{  background-color: rgba(var(--yellow-rgb), .55) !important;  border:1px solid rgba(var(--yellow-rgb), .9) !important;  color:#0b0b0b !important; }
+    .lvl-green{   background-color: rgba(var(--green-rgb), .55) !important;   border:1px solid rgba(var(--green-rgb), .9) !important;   color:#fff !important; }
+    .lvl-magenta{ background-color: rgba(var(--magenta-rgb), .55) !important; border:1px solid rgba(var(--magenta-rgb), .9) !important; color:#fff !important; }
+
+    .pct-cell{font-weight:700; text-align:right}
+    .right{display:flex; gap:10px; align-items:center}
+    .muted{color:var(--muted)}
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <div class="card-header">
-        <div class="title">Ventas Mercado Libre</div>
-
-        <div>
-          <label>Desde</label><br/>
-          <input id="from" type="date"/>
+      <div class="hdr">
+        <h1>Ventas Mercado Libre</h1>
+        <div class="controls">
+          <div>
+            <label for="from">Desde</label><br/>
+            <input id="from" type="date">
+          </div>
+          <div>
+            <label for="to">Hasta</label><br/>
+            <input id="to" type="date">
+          </div>
+          <button id="loadBtn">Cargar</button>
+          <a id="csvBtn" class="btn secondary" href="#" download>Descargar CSV</a>
         </div>
-        <div>
-          <label>Hasta</label><br/>
-          <input id="to" type="date"/>
+        <div class="right">
+          <div class="meta"><span id="rangeLabel" class="muted">Rango: —</span> · <b id="countLabel">Ventas: 0</b></div>
         </div>
-
-        <button id="load" class="btn">Cargar</button>
-        <a id="csv" class="btn secondary" href="#" download>Descargar CSV</a>
-
-        <div id="summary" class="meta">—</div>
       </div>
 
-      <div class="table-wrap">
-        <table id="tbl">
-          <thead></thead>
-          <tbody></tbody>
+      <!-- Totales -->
+      <div class="totalsbar">
+        <div class="tbox">
+          <label>Neto total</label>
+          <input id="sumNeto" readonly>
+        </div>
+        <div class="tbox">
+          <label>Costo total</label>
+          <input id="sumCosto" readonly>
+        </div>
+        <div class="tbox">
+          <label>Ganancia (Neto − Costo)</label>
+          <input id="sumGanancia" readonly>
+        </div>
+        <div class="tbox small">
+          <label>Promedio % ganancia</label>
+          <input id="avgPct" readonly>
+        </div>
+      </div>
+
+      <div class="scroller">
+        <table class="tbl" id="grid">
+          <thead><tr id="thead"></tr></thead>
+          <tbody id="tbody"><tr><td class="muted" colspan="99">Sin datos.</td></tr></tbody>
         </table>
       </div>
     </div>
   </div>
 
   <script>
-    const tbl = document.getElementById('tbl');
-    const thead = tbl.querySelector('thead');
-    const tbody = tbl.querySelector('tbody');
-    const fromEl = document.getElementById('from');
-    const toEl   = document.getElementById('to');
-    const loadBtn= document.getElementById('load');
-    const csvA   = document.getElementById('csv');
-    const summary= document.getElementById('summary');
+    const $ = sel => document.querySelector(sel);
 
-    // Defaults
-    const today = new Date();
-    const pad = n => String(n).padStart(2,'0');
-    const fmt = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-    fromEl.value = fmt(today); toEl.value = fmt(today);
-
-    loadBtn.addEventListener('click', loadData);
-    [fromEl, toEl].forEach(el => el.addEventListener('keydown', e => { if (e.key === 'Enter') loadData(); }));
-
-    async function loadData() {
-      const from = fromEl.value;
-      const to   = toEl.value;
-
-      const qs = new URLSearchParams({
-        from, to,
-        pageSize: '50',
-        maxPages: '200',
-        includeShipment: 'true'
-      });
-      const url = `/orders?${qs.toString()}`;
-      const csvUrl = `/orders.csv?${qs.toString()}`;
-      csvA.href = csvUrl;
-
-      summary.textContent = 'Cargando…';
-      const res = await fetch(url);
-      if (!res.ok) { summary.textContent = 'Error cargando datos'; return; }
-      const data = await res.json();
-      renderTable(data.headers, data.rows);
-      summary.textContent = `Rango: ${data.from} → ${data.to} · Ventas: ${data.count}`;
+    // $ ARS sin decimales
+    function fmtMoneyARS0(n){
+      if (n === '' || n === null || n === undefined) return '';
+      const num = Number(n);
+      if (!Number.isFinite(num)) return String(n);
+      const abs = Math.abs(num);
+      const sign = num < 0 ? '-' : '';
+      const parts = Math.round(abs).toString().split('');
+      for (let i = parts.length - 3; i > 0; i -= 3) parts.splice(i, 0, '.');
+      return `${sign}$ ${parts.join('')}`;
     }
 
-    function renderTable(headers, rows) {
-      thead.innerHTML = '';
-      tbody.innerHTML = '';
+    // % con 1 decimal
+    function fmtPct1(n){
+      const num = Number(n);
+      if (!Number.isFinite(num)) return '';
+      return `${num.toFixed(1)}%`;
+    }
 
-      // HEADERS
-      const trh = document.createElement('tr');
-      headers.forEach((h, idx) => {
+    // Colores por % (solo para GANANCIA %)
+    function classByPct(p){
+      if (!(p > -Infinity)) return '';
+      if (p < 40) return 'lvl-red';
+      if (p < 50) return 'lvl-yellow';
+      if (p < 60) return 'lvl-green';
+      return 'lvl-magenta';
+    }
+    function applyPctClass(el, p){
+      ['lvl-red','lvl-yellow','lvl-green','lvl-magenta'].forEach(c => el.classList.remove(c));
+      const cls = classByPct(p);
+      if (cls) el.classList.add(cls);
+    }
+
+    function todayYMD(){
+      const d = new Date(); const pad = n=>String(n).padStart(2,'0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    }
+
+    (function init(){
+      const ymd = todayYMD();
+      $('#from').value = ymd;
+      $('#to').value   = ymd;
+      $('#loadBtn').addEventListener('click', loadData);
+      ['from','to'].forEach(id => $('#'+id).addEventListener('keydown', e => { if (e.key === 'Enter') loadData(); }));
+      loadData();
+    })();
+
+    const DEFAULT_DATE_BY = 'both';
+
+    async function loadData(){
+      const from = $('#from').value;
+      const to = $('#to').value;
+
+      const qs = new URLSearchParams({ from, to, dateBy: DEFAULT_DATE_BY });
+      const url = `/orders?${qs.toString()}`;
+
+      $('#csvBtn').href = `/orders.csv?${qs.toString()}`;
+      $('#rangeLabel').textContent = `Rango: ${from} → ${to}`;
+
+      const resp = await fetch(url, { headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' }});
+      if (!resp.ok){
+        const t = await resp.text().catch(()=> '');
+        alert('Error cargando órdenes: ' + resp.status + ' ' + t);
+        return;
+      }
+      const data = await resp.json();
+
+      const thead = $('#thead'); thead.innerHTML = '';
+      (data.headers || []).forEach(h => {
         const th = document.createElement('th');
-        const wrap = document.createElement('div');
-        wrap.className = 'th-wrap';
-        wrap.textContent = h;
-
-        const rz = document.createElement('span');
-        rz.className = 'col-resizer';
-        wrap.appendChild(rz);
-        th.appendChild(wrap);
-        trh.appendChild(th);
-
-        makeResizable(th, idx);
+        th.textContent = h;
+        thead.appendChild(th);
       });
-      thead.appendChild(trh);
 
-      // BODY
-      rows.forEach(r => {
+      const tbody = $('#tbody'); tbody.innerHTML = '';
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      $('#countLabel').textContent = `Ventas: ${rows.length}`;
+
+      // índices (ver HEADERS del server)
+      const moneyCols = [3,4,5,7,9,10,11,12]; // mantiene formato actual
+      const pctColsGainOnly = [6];            // SOLO GANANCIA %
+      const pctDiscountCol = 8;               // % DESCUENTO (sin colores)
+
+      let sumNeto = 0, sumCosto = 0, sumPct = 0, pctCount = 0;
+
+      rows.forEach((row, idx) => {
         const tr = document.createElement('tr');
-        r.forEach((cell, idx) => {
+        tr.dataset.key = `${row[0] ?? ''}|${row[3] ?? ''}|${idx}`;
+
+        row.forEach((cell, j) => {
           const td = document.createElement('td');
-          if (idx === 0 && cell != null) {
-            td.classList.add('idcell');
-            td.textContent = String(cell);
-          } else if (typeof cell === 'number') {
-            td.classList.add('num');
-            td.textContent = formatNumber(cell);
+
+          if (moneyCols.includes(j)){
+            td.textContent = fmtMoneyARS0(cell);
+            td.style.textAlign = 'right';
+          } else if (pctColsGainOnly.includes(j)){
+            const p = Number(cell);
+            td.textContent = fmtPct1(p);
+            td.classList.add('pct-cell');
+            applyPctClass(td, p);
+          } else if (j === pctDiscountCol){
+            // % DESCUENTO sin formato condicional
+            const p = Number(cell);
+            td.textContent = fmtPct1(p);
+            td.style.textAlign = 'right';
           } else {
-            td.textContent = cell == null ? '' : cell;
+            td.textContent = (cell ?? '');
           }
+
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
+
+        // totales
+        const neto = Number(row[4]) || 0;
+        const costo = Number(row[5]) || 0;
+        const pct  = Number(row[6]);
+
+        sumNeto  += neto;
+        sumCosto += costo;
+        if (Number.isFinite(pct)) { sumPct += pct; pctCount++; }
       });
 
-      // aplicar anchos guardados o defaults
-      restoreOrInitWidths(headers.length);
-    }
+      const totalGanancia = sumNeto - sumCosto;
+      const promPct = pctCount ? (sumPct / pctCount) : 0;
 
-    function formatNumber(n) {
-      try { return n.toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
-      catch { return String(n); }
-    }
+      $('#sumNeto').value     = fmtMoneyARS0(sumNeto);
+      $('#sumCosto').value    = fmtMoneyARS0(sumCosto);
+      // Mostrar SOLO el importe (sin % ni colores)
+      $('#sumGanancia').value = fmtMoneyARS0(totalGanancia);
 
-    // ----- Resize -----
-    function makeResizable(th, colIndex) {
-      const resizer = th.querySelector('.col-resizer');
-      if (!resizer) return;
-
-      let startX = 0, startW = 0;
-      const minW = 60;
-
-      const onMouseDown = (e) => {
-        startX = e.pageX;
-        startW = th.offsetWidth;
-        document.body.classList.add('resizing');
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-      };
-      const onMouseMove = (e) => {
-        const dx = e.pageX - startX;
-        const newW = Math.max(minW, startW + dx);
-        setColumnWidth(colIndex, newW);
-      };
-      const onMouseUp = () => {
-        document.body.classList.remove('resizing');
-        document.removeEventListener('mousemove', onMouseMove);
-        document.removeEventListener('mouseup', onMouseUp);
-        saveColumnWidths();
-      };
-      resizer.addEventListener('mousedown', onMouseDown);
+      // El promedio sí conserva el formato condicional
+      $('#avgPct').value = fmtPct1(promPct);
+      applyPctClass($('#avgPct'), promPct);
     }
-
-    function setColumnWidth(colIndex, px) {
-      const th = thead.querySelector(`th:nth-child(${colIndex+1})`);
-      if (th) th.style.width = px + 'px';
-      tbody.querySelectorAll('tr').forEach(tr => {
-        const td = tr.children[colIndex];
-        if (td) td.style.width = px + 'px';
-      });
-    }
-
-    function getColumnWidths() {
-      const ths = [...thead.querySelectorAll('th')];
-      return ths.map(th => th.offsetWidth || parseInt(th.style.width || 0, 10) || 0);
-    }
-    function saveColumnWidths() {
-      const widths = getColumnWidths();
-      localStorage.setItem('ordersTableWidths', JSON.stringify(widths));
-    }
-    function restoreOrInitWidths(colCount) {
-      const raw = localStorage.getItem('ordersTableWidths');
-      let widths = [];
-      if (raw) { try { widths = JSON.parse(raw) || []; } catch {} }
-      if (!widths || widths.length !== colCount) {
-        // defaults amables por columna
-        widths = [
-          160, 160, 420, 140, 120, 120, 140, 120, 120, 140, 110, 110, 140, 80
-        ].slice(0, colCount);
-      }
-      widths.forEach((w, i) => { if (w && Number.isFinite(w)) setColumnWidth(i, w); });
-    }
-
-    // init
-    loadData();
   </script>
 </body>
 </html>
-

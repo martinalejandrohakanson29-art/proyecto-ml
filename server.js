@@ -1,4 +1,4 @@
-// server.js (FAST)
+// server.js (FAST - con fixes NETO, CSV AR$, lookback=5d, dateBy=both por defecto)
 import 'dotenv/config';
 import express from 'express';
 import fs from 'node:fs';
@@ -23,10 +23,18 @@ app.use(express.static('public'));
 
 // ===== Config de performance / comportamiento =====
 const TZ_OFFSET = process.env.TZ_OFFSET || '-03:00';
-const DEFAULT_DATE_BY = (process.env.DEFAULT_DATE_BY || 'created').toLowerCase(); // created|paid|both
-const PAID_LOOKBACK_DAYS = Number(process.env.PAID_LOOKBACK_DAYS || 7);          // ventana hacia atrás p/paid
-const FETCH_PAYMENTS_DEFAULT = process.env.FETCH_PAYMENTS === 'true';            // off por defecto
-const ENABLE_MP_TAXES = process.env.ENABLE_MP_TAXES === 'true';                  // off por defecto
+// ⚠️ por defecto tomamos “ambas” fechas (created|paid)
+const DEFAULT_DATE_BY = (process.env.DEFAULT_DATE_BY || 'both').toLowerCase();
+// ventana hacia atrás para búsquedas by=paid/both
+const PAID_LOOKBACK_DAYS = Number(process.env.PAID_LOOKBACK_DAYS || 5);
+// traer payments de la API si hace falta (off por defecto)
+const FETCH_PAYMENTS_DEFAULT = process.env.FETCH_PAYMENTS === 'true';
+// calcular impuestos MP (por defecto true para que cuadre con ML)
+const ENABLE_MP_TAXES = process.env.ENABLE_MP_TAXES !== 'false';
+// incluir datos de envío por defecto (true)
+const INCLUDE_SHIPMENT_DEFAULT = process.env.INCLUDE_SHIPMENT_DEFAULT !== 'false';
+// CSV: formato default (ars|raw)
+const CSV_FMT_DEFAULT = (process.env.CSV_FMT_DEFAULT || 'ars').toLowerCase();
 
 // ===== Utilidades de fecha (AR -03:00) =====
 function dateWithOffset(raw, endOfDay) {
@@ -51,10 +59,25 @@ function parseRangeAR(q) {
   };
 }
 
-// Índice FECHA (para filas-array)
-const FECHA_IDX = Math.max(HEADERS.indexOf('FECHA'), 1);
+// Índices de columnas útiles
+const IDX = {
+  ID_VENTA: HEADERS.indexOf('ID DE VENTA'),
+  FECHA: HEADERS.indexOf('FECHA'),
+  TITULO: HEADERS.indexOf('TITULO'),
+  PRECIO_FINAL_COMPRADOR: HEADERS.indexOf('Precio Final'), // lo que pagó el comprador (con interés)
+  NETO: HEADERS.indexOf('NETO'),
+  COSTO: HEADERS.indexOf('COSTO'),
+  GANANCIA: HEADERS.indexOf('GANANCIA'),
+  PRECIO_BASE: HEADERS.indexOf('PRECIO BASE'),
+  DESCUENTO_PCT: HEADERS.indexOf('% DESCUENTO'),
+  PRECIO_FINAL_SIN_INTERES: HEADERS.indexOf('PRECIO FINAL'), // transaction_amount
+  ENVIO: HEADERS.indexOf('ENVIO'),
+  IMPUESTO: HEADERS.indexOf('IMPUESTO'),
+  CARGO: HEADERS.indexOf('CARGO X VENTA'),
+  CUOTAS: HEADERS.indexOf('CUOTAS'),
+};
 
-// Parser flexible (array/obj)
+// Parser flexible (array/obj) para FECHA
 function rowTimeMs(r) {
   const TZ = TZ_OFFSET;
   const P = (s) => {
@@ -65,11 +88,11 @@ function rowTimeMs(r) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(str)) { const ms = Date.parse(`${str}T00:00:00.000${TZ}`); return Number.isNaN(ms)?NaN:ms; }
     const ms = Date.parse(str); return Number.isNaN(ms)?NaN:ms;
   };
-  const c = Array.isArray(r) ? r[FECHA_IDX] : (r?.FECHA ?? r?.date ?? r?.date_created);
+  const c = Array.isArray(r) ? r[Math.max(IDX.FECHA, 1)] : (r?.FECHA ?? r?.date ?? r?.date_created);
   return P(c);
 }
 
-// ===== Impuestos (opcional) =====
+// ===== Impuestos (Mercado Pago) =====
 async function computeTaxesFromMercadoPago(payments = []) {
   const mpToken = process.env.MP_ACCESS_TOKEN;
   if (!mpToken) return null;
@@ -187,13 +210,151 @@ async function fetchOrdersByIdsOrPacks(ids = [], sellerId, token) {
   return Array.from(out.values());
 }
 
+// ===== Helpers: Fix de NETO (usar transaction_amount) =====
+function toNum(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function fixRowNETO(row) {
+  // Usar "PRECIO FINAL" si existe, si no, caer a "Precio Final"
+  const pfIdxUpper = HEADERS.indexOf('PRECIO FINAL');
+  const pfIdxLower = HEADERS.indexOf('Precio Final');
+  const pfIdx = (pfIdxUpper >= 0) ? pfIdxUpper : pfIdxLower;
+
+  // Si no encontramos ninguna columna de precio, no tocamos el row
+  if (pfIdx < 0) return row;
+
+  const pf    = toNum(row[pfIdx]);
+  const cargo = toNum(row[IDX.CARGO]);
+  const envio = toNum(row[IDX.ENVIO]);
+  const imp   = toNum(row[IDX.IMPUESTO]);
+
+  // Si pf es 0/NaN, no recalcular (evita pisar el NETO correcto del mapper)
+  if (!pf) return row;
+
+  const neto = pf - cargo - envio - imp;
+  if (IDX.NETO >= 0) {
+    row[IDX.NETO] = Math.round((neto + Number.EPSILON) * 100) / 100;
+  }
+  return row;
+}
+
+
+// ===== CSV helpers =====
+function formatArs(n) {
+  const value = Number(n);
+  if (!Number.isFinite(value)) return '';
+  // $ 225.101,46
+  const parts = value.toFixed(2).split('.');
+  const int = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const dec = parts[1];
+  return `$ ${int},${dec}`;
+}
+const CURRENCY_COLUMNS = new Set([
+  'Precio Final','NETO','COSTO','PRECIO BASE','PRECIO FINAL','ENVIO','IMPUESTO','CARGO X VENTA'
+]);
+
 // ===== Rutas =====
-app.get('/', (_req, res) => res.type('text').send('API ML OK. Endpoints: /orders, /orders.csv, /debug/token'));
+app.get('/', (_req, res) => res.type('text').send('API ML OK. Endpoints: /orders, /orders.csv, /debug/token, /debug/orders-raw'));
 app.get('/debug/token', async (_req, res) => {
   try {
     const token = await getTokenFromSheetsCached();
     res.json({ ok: true, tokenLength: token.length, preview: token ? token.slice(0,12)+'...' : '' });
   } catch (e) { res.status(500).json({ ok:false, error: e.message }); }
+});
+
+// Debug crudo
+app.get('/debug/orders-raw', async (req, res) => {
+  try {
+    const token = await getTokenFromSheetsCached();
+    setMeliToken(token);
+
+    const rawMode = String(req.query.dateBy || req.query.mode || DEFAULT_DATE_BY).toLowerCase();
+    const dateBy = (rawMode === 'created' || rawMode === 'paid' || rawMode === 'both') ? rawMode : DEFAULT_DATE_BY;
+    const { fromISO, toISO, fromMs, toMs, fromYMD, toYMD } = parseRangeAR(req.query);
+
+    const paidLookbackDays = Number(req.query.paidLookbackDays || PAID_LOOKBACK_DAYS);
+    let searchFromISO = fromISO, searchToISO = toISO;
+    if (dateBy !== 'created') {
+      const lookbackMs = paidLookbackDays * 24 * 60 * 60 * 1000;
+      searchFromISO = new Date(fromMs - lookbackMs).toISOString();
+      searchToISO   = new Date(toMs).toISOString();
+    }
+
+    const includeShipment = req.query.includeShipment !== 'false';
+    const fetchPayments = req.query.fetchPayments === 'true' || FETCH_PAYMENTS_DEFAULT;
+
+    const sellerId  = await getUserId();
+    const limitPage = Math.min(parseInt(req.query.pageSize || '50', 10), 50);
+    const pages     = Math.min(parseInt(req.query.maxPages || '20', 10), 200);
+
+    let offset = 0;
+    const items = [];
+
+    for (let i = 0; i < pages; i++) {
+      const { data } = await searchOrdersByDate({
+        sellerId,
+        fromISO: searchFromISO,
+        toISO: searchToISO,
+        limit: limitPage,
+        offset,
+      });
+      const results = data?.results || [];
+      if (!results.length) break;
+
+      for (const order of results) {
+        if (order?.status === 'cancelled') continue;
+
+        let payments = order?.payments || [];
+        let paidMs = (dateBy !== 'created') ? getPaidMs(order, payments) : NaN;
+        if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
+          try { payments = await getOrderPayments(order.id); } catch {}
+          paidMs = getPaidMs(order, payments);
+        }
+
+        let inRange;
+        const createdMs = Date.parse(order?.date_created);
+        if (dateBy === 'created') {
+          inRange = Number.isFinite(createdMs) && createdMs >= fromMs && createdMs <= toMs;
+        } else if (dateBy === 'paid') {
+          inRange = Number.isFinite(paidMs) && paidMs >= fromMs && paidMs <= toMs;
+        } else {
+          const createdIn = Number.isFinite(createdMs) && createdMs >= fromMs && createdMs <= toMs;
+          const paidIn    = Number.isFinite(paidMs)    && paidMs    >= fromMs && paidMs    <= toMs;
+          inRange = createdIn || paidIn;
+        }
+        if (!inRange) continue;
+
+        let shipmentData = null;
+        if (includeShipment) {
+          const shipmentId = order?.shipping?.id || order?.order_items?.[0]?.shipping?.id;
+          if (shipmentId) { try { shipmentData = await getShipment(shipmentId); } catch {} }
+        }
+
+        let taxesFromMp = null;
+        if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
+          try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
+        }
+
+        const createdMsOut = Date.parse(order?.date_created);
+        items.push({
+          order,
+          payments,
+          shipment: shipmentData,
+          createdMs: createdMsOut,
+          paidMs: paidMs,
+          pivot: (dateBy === 'created') ? 'created' : (dateBy === 'paid') ? 'paid' : (Number.isFinite(paidMs) ? 'paid' : 'created'),
+          fechaPivot: (Number.isFinite(paidMs) ? new Date(paidMs) : new Date(createdMsOut)).toISOString().replace('T',' ').slice(0,19),
+          taxesFromMp,
+        });
+      }
+
+      if (results.length < limitPage) break;
+      offset += limitPage;
+    }
+
+    res.json({ from: fromYMD, to: toYMD, dateBy, count: items.length, items });
+  } catch (err) {
+    console.error('[debug/orders-raw] error:', err);
+    res.status(500).json({ error: err?.message || 'Internal error' });
+  }
 });
 
 // ====== /orders ======
@@ -203,13 +364,11 @@ app.get('/orders', async (req, res) => {
     setMeliToken(token);
     const costsMap = await getCostsMapFromSheetsCached();
 
-    // Modo (rápido por defecto = created)
     const rawMode = String(req.query.dateBy || req.query.mode || DEFAULT_DATE_BY).toLowerCase();
     const dateBy = (rawMode === 'created' || rawMode === 'paid' || rawMode === 'both') ? rawMode : DEFAULT_DATE_BY;
 
     const { fromISO, toISO, fromMs, toMs, fromYMD, toYMD } = parseRangeAR(req.query);
 
-    // Si el modo usa pago (paid/both) ampliamos un poquito la ventana (lookback)
     const paidLookbackDays = Number(req.query.paidLookbackDays || PAID_LOOKBACK_DAYS);
     let searchFromISO = fromISO, searchToISO = toISO;
     if (dateBy !== 'created') {
@@ -218,7 +377,7 @@ app.get('/orders', async (req, res) => {
       searchToISO   = new Date(toMs).toISOString();
     }
 
-    const includeShipment = req.query.includeShipment === 'true';
+    const includeShipment = (req.query.includeShipment ?? '').length ? (req.query.includeShipment === 'true') : INCLUDE_SHIPMENT_DEFAULT;
     const fetchPayments = req.query.fetchPayments === 'true' || FETCH_PAYMENTS_DEFAULT;
 
     // --- Búsqueda por IDs (order/pack) ---
@@ -229,12 +388,10 @@ app.get('/orders', async (req, res) => {
       const orders = baseOrders.filter(o => o?.status !== 'cancelled');
 
       const batch = await Promise.all(orders.map(order => limit(async () => {
-        // Filtro “barato” primero: creation y paid usando date_closed + order.payments
         const createdMs = Date.parse(order?.date_created);
         let payments = order?.payments || [];
         let paidMs = getPaidMs(order, payments);
 
-        // Si estoy filtrando por pago y aún no tengo fecha, opcionalmente pego a la API
         if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
           try { payments = await getOrderPayments(order.id); } catch {}
           paidMs = getPaidMs(order, payments);
@@ -252,23 +409,22 @@ app.get('/orders', async (req, res) => {
         }
         if (!inRange) return null;
 
-        // Impuestos MP (opcional)
         let taxesFromMp = null;
         if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
           try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
         }
 
-        // Envío (opcional)
         let shipmentData = null;
         const shipmentId = order?.shipping?.id || order?.order_items?.[0]?.shipping?.id;
         if (includeShipment && shipmentId) { try { shipmentData = await getShipment(shipmentId); } catch {} }
 
-        return mapOrderToGridRow(
+        const row = mapOrderToGridRow(
           { ...order, _taxesFromMP: taxesFromMp },
           summarizePayments(payments),
           shipmentData,
           costsMap
         );
+        return fixRowNETO(row);
       })));
 
       const rows = batch.filter(Boolean);
@@ -299,17 +455,14 @@ app.get('/orders', async (req, res) => {
       const batch = await Promise.all(orders.map(order => limit(async () => {
         const createdMs = Date.parse(order?.date_created);
 
-        // Primero intentamos con info local (rápido)
         let payments = order?.payments || [];
         let paidMs = (dateBy !== 'created') ? getPaidMs(order, payments) : NaN;
 
-        // Si necesito pago y no lo tengo, sólo entonces puedo ir a la API (si lo pedís)
         if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
           try { payments = await getOrderPayments(order.id); } catch {}
           paidMs = getPaidMs(order, payments);
         }
 
-        // Decidir inclusión
         let inRange;
         if (dateBy === 'created') {
           inRange = Number.isFinite(createdMs) && createdMs >= fromMs && createdMs <= toMs;
@@ -322,23 +475,22 @@ app.get('/orders', async (req, res) => {
         }
         if (!inRange) return null;
 
-        // Impuestos MP (opcional)
         let taxesFromMp = null;
         if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
           try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
         }
 
-        // Envío (opcional)
         let shipmentData = null;
         const shipmentId = order?.shipping?.id || order?.order_items?.[0]?.shipping?.id;
         if (includeShipment && shipmentId) { try { shipmentData = await getShipment(shipmentId); } catch {} }
 
-        return mapOrderToGridRow(
+        const row = mapOrderToGridRow(
           { ...order, _taxesFromMP: taxesFromMp },
           summarizePayments(payments),
           shipmentData,
           costsMap
         );
+        return fixRowNETO(row);
       })));
 
       rows.push(...batch.filter(Boolean));
@@ -372,14 +524,21 @@ app.get('/orders.csv', async (req, res) => {
       searchToISO   = new Date(toMs).toISOString();
     }
 
-    const includeShipment = req.query.includeShipment === 'true';
+    const includeShipment = (req.query.includeShipment ?? '').length ? (req.query.includeShipment === 'true') : INCLUDE_SHIPMENT_DEFAULT;
     const fetchPayments = req.query.fetchPayments === 'true' || FETCH_PAYMENTS_DEFAULT;
 
     const sellerId  = await getUserId();
     const limitPage = Math.min(parseInt(req.query.pageSize || '50', 10), 50);
     const pages     = Math.min(parseInt(req.query.maxPages || '20', 10), 200);
 
+    // Formato CSV por defecto ARS
+    const fmt = (req.query.fmt || CSV_FMT_DEFAULT).toLowerCase();
+
     const esc = (v) => { if (v == null) v = ''; const s = String(v).replace(/"/g,'""'); return `"${s}"`; };
+    const maybeFmt = (header, val) => {
+      if (fmt === 'ars' && CURRENCY_COLUMNS.has(header)) return formatArs(val);
+      return val;
+    };
 
     // Rama por IDs
     const idsList = String(req.query.id || req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -414,18 +573,23 @@ app.get('/orders.csv', async (req, res) => {
         const shipmentId = order?.shipping?.id || order?.order_items?.[0]?.shipping?.id;
         if (includeShipment && shipmentId) { try { shipmentData = await getShipment(shipmentId); } catch {} }
 
-        return mapOrderToGridRow(
+        const row = mapOrderToGridRow(
           { ...order, _taxesFromMP: taxesFromMp },
           summarizePayments(payments),
           shipmentData,
           costsMap
         );
+        return fixRowNETO(row);
       })));
 
       const rows = batch.filter(Boolean);
-      const lines = [HEADERS.map(esc).join(',')];
+      const lines = [HEADERS.map(h => esc(h)).join(',')];
       for (const row of rows) {
-        const cells = row.map((v, idx) => (idx === 0 && v != null && v !== '') ? `="${String(v)}"` : esc(v));
+        const cells = row.map((v, idx) => {
+          const header = HEADERS[idx] || '';
+          const val = (idx === 0 && v != null && v !== '') ? `="${String(v)}"` : maybeFmt(header, v);
+          return esc(val);
+        });
         lines.push(cells.join(','));
       }
       const csv = '\uFEFF' + lines.join('\r\n');
@@ -479,12 +643,13 @@ app.get('/orders.csv', async (req, res) => {
         const shipmentId = order?.shipping?.id || order?.order_items?.[0]?.shipping?.id;
         if (includeShipment && shipmentId) { try { shipmentData = await getShipment(shipmentId); } catch {} }
 
-        return mapOrderToGridRow(
+        const row = mapOrderToGridRow(
           { ...order, _taxesFromMP: taxesFromMp },
           summarizePayments(payments),
           shipmentData,
           costsMap
         );
+        return fixRowNETO(row);
       })));
 
       allRows.push(...batch.filter(Boolean));
@@ -492,10 +657,13 @@ app.get('/orders.csv', async (req, res) => {
       offset += limitPage;
     }
 
-    const esc2 = (v) => { if (v == null) v = ''; const s = String(v).replace(/"/g,'""'); return `"${s}"`; };
-    const lines = [HEADERS.map(esc2).join(',')];
+    const lines = [HEADERS.map(h => esc(h)).join(',')];
     for (const row of allRows) {
-      const cells = row.map((v, idx) => (idx === 0 && v != null && v !== '') ? `="${String(v)}"` : esc2(v));
+      const cells = row.map((v, idx) => {
+        const header = HEADERS[idx] || '';
+        const val = (idx === 0 && v != null && v !== '') ? `="${String(v)}"` : maybeFmt(header, v);
+        return esc(val);
+      });
       lines.push(cells.join(','));
     }
     const csv = '\uFEFF' + lines.join('\r\n');
@@ -509,5 +677,8 @@ app.get('/orders.csv', async (req, res) => {
   }
 });
 
+// Ping de debug simple
+app.get('/debug/ping', (_req, res) => res.json({ ok: true }));
+
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`ML backend listo (rápido) en http://localhost:${port}`));
+app.listen(port, () => console.log(`ML backend listo en http://localhost:${port}`));

@@ -1,120 +1,179 @@
 // src/utils/mapOrder.js
-import dayjs from 'dayjs';
 
-function r2(v) {
-  if (v === null || v === undefined || Number.isNaN(v)) return null;
-  return Math.round(Number(v) * 100) / 100;
+// ==========================
+// Helpers
+// ==========================
+const LOG_NETO = String(process.env.LOG_NETO || '').toLowerCase() === 'true';
+
+const round = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const round1 = (n) => Math.round((Number(n) || 0) * 10) / 10; // 1 decimal para %
+const num = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const formatDateTime = (d) => {
+  if (!d) return '';
+  const date = typeof d === 'number' ? new Date(d) : new Date(String(d));
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (x) => String(x).padStart(2, '0');
+  const yyyy = date.getFullYear();
+  const mm = pad(date.getMonth() + 1);
+  const dd = pad(date.getDate());
+  const hh = pad(date.getHours());
+  const mi = pad(date.getMinutes());
+  const ss = pad(date.getSeconds());
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+};
+
+// ==========================
+// Extractores
+// ==========================
+function getTitulo(order) {
+  return order?.order_items?.[0]?.item?.title ?? '';
 }
 
-/**
- * HEADERS:
- * ["ID DE VENTA","FECHA","TITULO","Precio Final","NETO","COSTO","GANANCIA",
- *  "PRECIO BASE","% DESCUENTO","PRECIO FINAL","ENVIO","IMPUESTO","CARGO X VENTA","CUOTAS"]
- *
- * costsMap: objeto { [item_id]: costo_unitario }
- * taxOverride: número opcional (impuestos calculados vía Mercado Pago)
- */
-export function mapOrderToGridRow(
-  order,
-  _paymentsSummaryIgnored,
-  shipmentData,
-  costsMap = {},
-  taxOverride = null
-) {
-  const item = order?.order_items?.[0] || {};
-  const itemInfo = item?.item || {};
-  const qty = item?.quantity ?? 1;
+function getPrecioBase(order) {
+  return num(order?.order_items?.[0]?.full_unit_price);
+}
 
-  // Precios base/lista vs. con descuento
-  const fullUnit = Number(item?.full_unit_price ?? 0);
-  const unit     = Number(item?.unit_price ?? 0);
-  const basePrice = r2(fullUnit * qty);      // PRECIO BASE
-  const discountedSubtotal = r2(unit * qty); // PRECIO FINAL (subtotal ítem)
+function getPrecioFinal(order) {
+  // total_amount = total de ítems (sin envío)
+  return num(order?.total_amount ?? order?.order_items?.[0]?.unit_price);
+}
 
-  // Pagos / totales
-  const pay = (order?.payments && order.payments[0]) || {};
-  const totalPaid = r2(pay?.total_paid_amount ?? order?.total_amount ?? discountedSubtotal);
+function getDescuentoPct(order) {
+  const base = getPrecioBase(order);
+  const final = getPrecioFinal(order);
+  if (!base || base <= 0) return 0;
+  return round((1 - final / base) * 100);
+}
 
-  // ================== ENVÍO (mejorado) ==================
-  const priceForShipment = discountedSubtotal ?? totalPaid ?? 0;
-  const UMBRAL = Number(process?.env?.FREE_SHIPPING_THRESHOLD ?? 33000);
+function getCargoVenta(order) {
+  return num(order?.order_items?.[0]?.sale_fee);
+}
 
-  const shippingFromPay = Number.isFinite(pay?.shipping_cost) ? Number(pay.shipping_cost) : 0;
+function getEnvio(order, shipment) {
+  const s = shipment ?? order?.shipment ?? {};
+  return num(s?.shipping_option?.list_cost ?? s?.shipping_option?.cost ?? 0);
+}
 
-  let shippingCostCalc = shippingFromPay;
-  if (shipmentData) {
-    const receiverCost =
-      Number(
-        shipmentData?.receiver_cost ??
-        shipmentData?.cost_components?.receiver?.cost ??
-        0
-      );
+function getImpuesto(order) {
+  if (order && order._taxesFromMP != null) return num(order._taxesFromMP);
+  const approved = (order?.payments || []).find(
+    (p) => String(p?.status).toLowerCase() === 'approved'
+  );
+  return num(approved?.taxes_amount);
+}
 
-    const paidBy =
-      shipmentData?.shipping_option?.cost_components?.paid_by ??
-      shipmentData?.cost_components?.paid_by ??
-      null;
+function getCuotas(order) {
+  const approved = (order?.payments || []).find(
+    (p) => String(p?.status).toLowerCase() === 'approved'
+  );
+  return approved?.installments ?? 0;
+}
 
-    const listCost =
-      Number(
-        shipmentData?.shipping_option?.list_cost ??
-        shipmentData?.shipping_option?.cost_components?.list_cost ??
-        shipmentData?.costs?.list ??
-        shipmentData?.costs?.receiver ??
-        0
-      );
+function getFechaPivot(order) {
+  if (order?.fechaPivot) return order.fechaPivot;
+  return (
+    formatDateTime(order?.paidMs) ||
+    formatDateTime(order?.date_closed) ||
+    formatDateTime(order?.date_created)
+  );
+}
 
-    if (receiverCost > 0) {
-      // Lo pagó el comprador => costo vendedor = 0
-      shippingCostCalc = 0;
-    } else if (listCost > 0 && (paidBy === 'seller' || priceForShipment >= UMBRAL)) {
-      // Lo paga el vendedor explícitamente o por umbral
-      shippingCostCalc = listCost;
+// ==========================
+// Costo desde costsMap (sumado por ítem * cantidad)
+// ==========================
+function getCostoFromMap(order, costsMap = {}) {
+  const items = Array.isArray(order?.order_items) ? order.order_items : [];
+  let total = 0;
+  for (const it of items) {
+    const qty = num(it?.quantity || 1);
+    const candIds = [
+      String(it?.item?.id ?? ''),
+      String(it?.item?.seller_sku ?? ''),
+      String(it?.variation_id ?? ''),
+    ].filter(Boolean);
+
+    let unitCost = 0;
+    for (const key of candIds) {
+      if (key && costsMap[key] != null) {
+        unitCost = num(costsMap[key]);
+        break;
+      }
     }
+    total += round(unitCost * qty);
   }
-  const shippingCost = r2(shippingCostCalc || 0);
-  // ======================================================
+  return round(total);
+}
 
-  // Impuestos: priorizamos override desde MP; si no, lo que traiga ML
-  const taxesML = r2(pay?.taxes_amount ?? order?.taxes?.amount ?? 0);
-  const taxes   = taxOverride != null ? r2(taxOverride) : taxesML;
+// ==========================
+// Mapeo a la fila esperada
+// Headers (13):
+// ["ID DE VENTA","FECHA","TITULO","Precio Final","NETO","COSTO","GANANCIA","PRECIO BASE","% DESCUENTO","ENVIO","IMPUESTO","CARGO X VENTA","CUOTAS"]
+// ==========================
+export function mapOrderToGridRow(order, _paymentsSummary, shipmentData, costsMap) {
+  const orderId = order?.id ?? 0;
+  const fecha = getFechaPivot(order);
+  const titulo = getTitulo(order);
 
-  // CARGO X VENTA (fee ML que viene en el item)
-  const saleFee = r2(item?.sale_fee ?? 0);
+  // Valores base
+  const precioFinal = round(getPrecioFinal(order));
+  const precioBase = round(getPrecioBase(order));
+  const descuentoPct = round(getDescuentoPct(order));
 
-  // Neto
-  const neto = r2((totalPaid ?? 0) - (saleFee ?? 0) - (taxes ?? 0) - (shippingCost ?? 0));
+  // Cargos
+  let cargoVenta = 0;
+  if (Array.isArray(order?.order_items)) {
+    for (const it of order.order_items) cargoVenta += num(it?.sale_fee);
+  } else {
+    cargoVenta = getCargoVenta(order);
+  }
+  cargoVenta = round(cargoVenta);
 
-  // % descuento
-  const discountPct = fullUnit > 0 ? r2((1 - unit / fullUnit) * 100) : null;
+  const envio = round(getEnvio(order, shipmentData));
+  const impuesto = round(getImpuesto(order));
+  const costo = round(getCostoFromMap(order, costsMap));
 
-  // Cuotas
-  const installments = pay?.installments ?? null;
+  // NETO = lo que te queda antes del costo
+  const neto = round(precioFinal - (envio + impuesto + cargoVenta));
 
-  // COSTO desde hoja "Comparador"
-  const itemId = itemInfo?.id || null;
-  const unitCost =
-    itemId && Number.isFinite(Number(costsMap[itemId])) ? Number(costsMap[itemId]) : null;
-  const totalCost = unitCost !== null ? r2(unitCost * qty) : null;
+  // NUEVO: GANANCIA en %
+  // (neto - costo) / costo * 100
+  const gananciaPct = costo > 0 ? round1(((neto - costo) / costo) * 100) : 0;
 
-  // GANANCIA = NETO - COSTO
-  const profit = (neto !== null && totalCost !== null) ? r2(neto - totalCost) : null;
+  const cuotas = getCuotas(order);
+
+  if (LOG_NETO) {
+    console.log('[NETO DEBUG]', orderId, {
+      precioFinal,
+      envio,
+      impuesto,
+      cargoVenta,
+      neto,
+      costo,
+      gananciaPct,
+      precioBase,
+      descuentoPct,
+    });
+  }
 
   return [
-    order?.id ?? null,                                                // ID DE VENTA
-    order?.date_created ? dayjs(order.date_created).format('YYYY-MM-DD HH:mm:ss') : null, // FECHA
-    itemInfo?.title ?? null,                                          // TITULO
-    totalPaid,                                                        // Precio Final (total pagado)
-    neto,                                                             // NETO
-    totalCost,                                                        // COSTO
-    profit,                                                           // GANANCIA
-    basePrice,                                                        // PRECIO BASE
-    discountPct,                                                      // % DESCUENTO
-    discountedSubtotal,                                               // PRECIO FINAL (subtotal ítem)
-    shippingCost,                                                     // ENVIO
-    taxes,                                                            // IMPUESTO
-    saleFee,                                                          // CARGO X VENTA
-    installments,                                                     // CUOTAS
+    orderId,     // ID DE VENTA
+    fecha,       // FECHA (pivot)
+    titulo,      // TITULO
+    precioFinal, // Precio Final
+    neto,        // NETO
+    costo,       // Costo
+    gananciaPct, // GANANCIA (% sobre costo)
+    precioBase,  // PRECIO BASE
+    descuentoPct,// % DESCUENTO
+    envio,       // ENVIO
+    impuesto,    // IMPUESTO
+    cargoVenta,  // CARGO X VENTA
+    cuotas,      // CUOTAS
   ];
 }
 
+export default { mapOrderToGridRow };
