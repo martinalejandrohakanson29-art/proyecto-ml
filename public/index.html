@@ -17,8 +17,12 @@
     body{ margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell; background:var(--bg); color:var(--text); }
     .wrap{max-width:1200px; margin:24px auto; padding:0 16px}
     .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.25)}
-    .hdr{padding:16px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap}
-    .hdr h1{font-size:18px; margin:0; letter-spacing:.2px}
+
+    .hdr{padding:16px 18px; border-bottom:1px solid var(--line); display:flex; align-items:end; justify-content:space-between; gap:12px; flex-wrap:wrap}
+    .title{display:flex; align-items:center; gap:10px}
+    .title h1{font-size:18px; margin:0; letter-spacing:.2px}
+    .titleLogo{height:24px; width:auto; display:block; background:transparent}
+
     .controls{display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap}
     label{font-size:12px; color:var(--muted)}
     input,select,button,.btn{
@@ -27,8 +31,19 @@
     }
     input[type="date"]{padding:0 8px}
     button,.btn{cursor:pointer; background:var(--accent); color:#001813; border:none; font-weight:600}
+    button:disabled{opacity:.6; cursor:not-allowed}
     .btn.secondary{background:#1b2b46; color:var(--text); border:1px solid var(--line)}
-    .meta{font-size:12px; color:var(--muted)}
+    .meta{font-size:12px; color:var(--muted); min-height:18px; display:flex; align-items:center; gap:8px}
+
+    /* Spinner para "Cargando..." */
+    .spinner{
+      display:inline-block; width:14px; height:14px;
+      border:2px solid rgba(231,238,252,.25);
+      border-top-color: var(--accent);
+      border-radius:50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin{ to{ transform: rotate(360deg); } }
 
     .tbl{width:100%; border-collapse:collapse}
     .tbl th,.tbl td{padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap; font-size:13px}
@@ -46,6 +61,10 @@
     }
     .tbox.small input{min-width:160px}
 
+    /* logo de tu marca a la derecha de la barra de totales */
+    .brand{ margin-left:auto; display:flex; align-items:center; }
+    .brand img{ height:46px; width:auto; display:block; background:transparent; }
+
     /* colores intensos para % ganancia */
     .lvl-red{     background-color: rgba(var(--red-rgb), .55) !important;     border:1px solid rgba(var(--red-rgb), .9) !important;     color:#fff !important; }
     .lvl-yellow{  background-color: rgba(var(--yellow-rgb), .55) !important;  border:1px solid rgba(var(--yellow-rgb), .9) !important;  color:#0b0b0b !important; }
@@ -55,13 +74,24 @@
     .pct-cell{font-weight:700; text-align:right}
     .right{display:flex; gap:10px; align-items:center}
     .muted{color:var(--muted)}
+
+    /* Responsive */
+    @media (max-width: 680px){
+      .titleLogo{ height:20px; }
+      .brand img{ height:36px; }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
       <div class="hdr">
-        <h1>Ventas Mercado Libre</h1>
+        <!-- Título + logo de Mercado -->
+        <div class="title">
+          <h1>Ventas Mercado Libre</h1>
+          <img class="titleLogo" src="/img/mercado.png" alt="Mercado Libre" />
+        </div>
+
         <div class="controls">
           <div>
             <label for="from">Desde</label><br/>
@@ -74,8 +104,12 @@
           <button id="loadBtn">Cargar</button>
           <a id="csvBtn" class="btn secondary" href="#" download>Descargar CSV</a>
         </div>
+
         <div class="right">
-          <div class="meta"><span id="rangeLabel" class="muted">Rango: —</span> · <b id="countLabel">Ventas: 0</b></div>
+          <!-- Bloque que se reemplaza por "Cargando..." -->
+          <div class="meta" id="metaBox">
+            <span id="rangeLabel" class="muted">Rango: —</span> · <b id="countLabel">Ventas: 0</b>
+          </div>
         </div>
       </div>
 
@@ -96,6 +130,11 @@
         <div class="tbox small">
           <label>Promedio % ganancia</label>
           <input id="avgPct" readonly>
+        </div>
+
+        <!-- Logo de tu marca (revolucion.png) a la derecha -->
+        <div class="brand">
+          <img src="/img/revolucion.png" alt="Revolución Motos" />
         </div>
       </div>
 
@@ -149,102 +188,124 @@
       return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
     }
 
-    (function init(){
-      const ymd = todayYMD();
-      $('#from').value = ymd;
-      $('#to').value   = ymd;
-      $('#loadBtn').addEventListener('click', loadData);
-      ['from','to'].forEach(id => $('#'+id).addEventListener('keydown', e => { if (e.key === 'Enter') loadData(); }));
-      loadData();
-    })();
+    // Render del bloque meta (rango + ventas)
+    function renderMeta(from, to, count){
+      const metaBox = $('#metaBox');
+      metaBox.innerHTML = `<span id="rangeLabel" class="muted">Rango: ${from} → ${to}</span> · <b id="countLabel">Ventas: ${count}</b>`;
+    }
+
+  (function init(){
+  const ymd = todayYMD();
+  $('#from').value = ymd;
+  $('#to').value   = ymd;
+  $('#loadBtn').addEventListener('click', loadData);
+  ['from','to'].forEach(id => $('#'+id).addEventListener('keydown', e => { if (e.key === 'Enter') loadData(); }));
+  // sin auto carga: el spinner aparece recién al apretar “Cargar”
+})();
+
 
     const DEFAULT_DATE_BY = 'both';
 
     async function loadData(){
       const from = $('#from').value;
       const to = $('#to').value;
+      const loadBtn = $('#loadBtn');
+      const metaBox = $('#metaBox');
+
+      // Mostrar estado "Cargando..." y deshabilitar botón
+      metaBox.innerHTML = `<span class="spinner"></span><span class="muted">Cargando…</span>`;
+      loadBtn.disabled = true;
 
       const qs = new URLSearchParams({ from, to, dateBy: DEFAULT_DATE_BY });
       const url = `/orders?${qs.toString()}`;
 
-      $('#csvBtn').href = `/orders.csv?${qs.toString()}`;
-      $('#rangeLabel').textContent = `Rango: ${from} → ${to}`;
+      try{
+        const resp = await fetch(url, { headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' }});
+        if (!resp.ok){
+          const t = await resp.text().catch(()=> '');
+          alert('Error cargando órdenes: ' + resp.status + ' ' + t);
+          metaBox.innerHTML = `<span class="muted">Error al cargar</span>`;
+          return;
+        }
+        const data = await resp.json();
 
-      const resp = await fetch(url, { headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' }});
-      if (!resp.ok){
-        const t = await resp.text().catch(()=> '');
-        alert('Error cargando órdenes: ' + resp.status + ' ' + t);
-        return;
-      }
-      const data = await resp.json();
+        // Actualizar link CSV recién cuando hay datos
+        $('#csvBtn').href = `/orders.csv?${qs.toString()}&fmt=excel&locale=latam`;
 
-      const thead = $('#thead'); thead.innerHTML = '';
-      (data.headers || []).forEach(h => {
-        const th = document.createElement('th');
-        th.textContent = h;
-        thead.appendChild(th);
-      });
 
-      const tbody = $('#tbody'); tbody.innerHTML = '';
-      const rows = Array.isArray(data.rows) ? data.rows : [];
-      $('#countLabel').textContent = `Ventas: ${rows.length}`;
-
-      // índices (ver HEADERS del server)
-      const moneyCols = [3,4,5,7,9,10,11,12]; // mantiene formato actual
-      const pctColsGainOnly = [6];            // SOLO GANANCIA %
-      const pctDiscountCol = 8;               // % DESCUENTO (sin colores)
-
-      let sumNeto = 0, sumCosto = 0, sumPct = 0, pctCount = 0;
-
-      rows.forEach((row, idx) => {
-        const tr = document.createElement('tr');
-        tr.dataset.key = `${row[0] ?? ''}|${row[3] ?? ''}|${idx}`;
-
-        row.forEach((cell, j) => {
-          const td = document.createElement('td');
-
-          if (moneyCols.includes(j)){
-            td.textContent = fmtMoneyARS0(cell);
-            td.style.textAlign = 'right';
-          } else if (pctColsGainOnly.includes(j)){
-            const p = Number(cell);
-            td.textContent = fmtPct1(p);
-            td.classList.add('pct-cell');
-            applyPctClass(td, p);
-          } else if (j === pctDiscountCol){
-            // % DESCUENTO sin formato condicional
-            const p = Number(cell);
-            td.textContent = fmtPct1(p);
-            td.style.textAlign = 'right';
-          } else {
-            td.textContent = (cell ?? '');
-          }
-
-          tr.appendChild(td);
+        // Header
+        const thead = $('#thead'); thead.innerHTML = '';
+        (data.headers || []).forEach(h => {
+          const th = document.createElement('th');
+          th.textContent = h;
+          thead.appendChild(th);
         });
-        tbody.appendChild(tr);
 
-        // totales
-        const neto = Number(row[4]) || 0;
-        const costo = Number(row[5]) || 0;
-        const pct  = Number(row[6]);
+        const tbody = $('#tbody'); tbody.innerHTML = '';
+        const rows = Array.isArray(data.rows) ? data.rows : [];
 
-        sumNeto  += neto;
-        sumCosto += costo;
-        if (Number.isFinite(pct)) { sumPct += pct; pctCount++; }
-      });
+        // índices (ver HEADERS del server)
+        const moneyCols = [3,4,5,7,9,10,11,12]; // columnas de dinero
+        const pctColsGainOnly = [6];            // SOLO GANANCIA %
+        const pctDiscountCol = 8;               // % DESCUENTO (sin colores)
 
-      const totalGanancia = sumNeto - sumCosto;
-      const promPct = pctCount ? (sumPct / pctCount) : 0;
+        let sumNeto = 0, sumCosto = 0, sumPct = 0, pctCount = 0;
 
-      $('#sumNeto').value     = fmtMoneyARS0(sumNeto);
-      $('#sumCosto').value    = fmtMoneyARS0(sumCosto);
-      // Mostrar SOLO el importe (sin % ni colores)
-      $('#sumGanancia').value = fmtMoneyARS0(totalGanancia);
+        rows.forEach((row, idx) => {
+          const tr = document.createElement('tr');
+          tr.dataset.key = `${row[0] ?? ''}|${row[3] ?? ''}|${idx}`;
 
-      // El promedio sí conserva el formato condicional
-      $('#avgPct').value = fmtPct1(promPct);
-      applyPctClass($('#avgPct'), promPct);
+          row.forEach((cell, j) => {
+            const td = document.createElement('td');
+
+            if (moneyCols.includes(j)){
+              td.textContent = fmtMoneyARS0(cell);
+              td.style.textAlign = 'right';
+            } else if (pctColsGainOnly.includes(j)){
+              const p = Number(cell);
+              td.textContent = fmtPct1(p);
+              td.classList.add('pct-cell');
+              applyPctClass(td, p);
+            } else if (j === pctDiscountCol){
+              const p = Number(cell);
+              td.textContent = fmtPct1(p);   // sin colores
+              td.style.textAlign = 'right';
+            } else {
+              td.textContent = (cell ?? '');
+            }
+
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+
+          // totales
+          const neto = Number(row[4]) || 0;
+          const costo = Number(row[5]) || 0;
+          const pct  = Number(row[6]);
+
+          sumNeto  += neto;
+          sumCosto += costo;
+          if (Number.isFinite(pct)) { sumPct += pct; pctCount++; }
+        });
+
+        const totalGanancia = sumNeto - sumCosto;
+        const promPct = pctCount ? (sumPct / pctCount) : 0;
+
+        $('#sumNeto').value     = fmtMoneyARS0(sumNeto);
+        $('#sumCosto').value    = fmtMoneyARS0(sumCosto);
+        $('#sumGanancia').value = fmtMoneyARS0(totalGanancia);
+        $('#avgPct').value      = fmtPct1(promPct);
+        applyPctClass($('#avgPct'), promPct);
+
+        // Mostrar rango + cantidad (reemplaza el “Cargando…”)
+        renderMeta(from, to, rows.length);
+      } catch (e){
+        alert('Error de red cargando órdenes');
+        metaBox.innerHTML = `<span class="muted">Error al cargar</span>`;
+      } finally {
+        // Rehabilitar botón
+        loadBtn.disabled = false;
+      }
     }
   </script>
 </body>
