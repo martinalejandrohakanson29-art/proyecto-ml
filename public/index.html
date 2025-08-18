@@ -7,15 +7,35 @@
   <style>
     :root{
       --bg:#0f1623; --panel:#131c2b; --muted:#8ea3c2; --text:#e7eefc; --accent:#00c2a8; --line:#203049;
-      --red-rgb:220,61,82;      /* rojo fuerte */
-      --yellow-rgb:190,140,0;   /* ámbar */
-      --green-rgb:30,132,73;    /* verde */
-      --magenta-rgb:142,36,170; /* magenta */
+      --red-rgb:220,61,82;
+      --yellow-rgb:190,140,0;
+      --green-rgb:30,132,73;
+      --magenta-rgb:142,36,170;
+      --gap:14px;
     }
     *{box-sizing:border-box}
     html,body{height:100%}
     body{ margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell; background:var(--bg); color:var(--text); }
     .wrap{max-width:1200px; margin:24px auto; padding:0 16px}
+
+    /* ===== Top bar única (pestañas) ===== */
+    .topbar{
+      display:flex; align-items:center; justify-content:space-between;
+      padding:10px var(--gap); background:var(--panel);
+      border-bottom:1px solid var(--line); position:sticky; top:0; z-index:100;
+    }
+    .brand{ font-weight:600; opacity:.9; }
+    .tabs{ display:flex; gap:8px; }
+    .tab-btn{
+      background:transparent; border:1px solid var(--line); color:var(--text);
+      padding:6px 10px; border-radius:999px; cursor:pointer; font-weight:700;
+    }
+    .tab-btn.active{ border-color:var(--accent); background:var(--accent); color:#001813; }
+
+    /* Mostrar/ocultar paneles de tabs */
+    .panel[hidden]{ display:none; }
+
+    /* ===== Estilos del Dashboard ===== */
     .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.25)}
 
     .hdr{padding:16px 18px; border-bottom:1px solid var(--line); display:flex; align-items:end; justify-content:space-between; gap:12px; flex-wrap:wrap}
@@ -26,7 +46,7 @@
     .controls{display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap}
     label{font-size:12px; color:var(--muted)}
     input,select,button,.btn{
-      height:36px; border-radius:10px; border:1px solid var(--line); background:#0f1a2b; color:var(--text);
+      height:36px; border-radius:10px; border:1px solid var(--line); background:#0f1a2b; color:#fff;
       padding:0 10px; outline:none;
     }
     input[type="date"]{padding:0 8px}
@@ -35,7 +55,6 @@
     .btn.secondary{background:#1b2b46; color:var(--text); border:1px solid var(--line)}
     .meta{font-size:12px; color:var(--muted); min-height:18px; display:flex; align-items:center; gap:8px}
 
-    /* Spinner para "Cargando..." */
     .spinner{
       display:inline-block; width:14px; height:14px;
       border:2px solid rgba(231,238,252,.25);
@@ -56,16 +75,14 @@
     .tbox{display:flex; flex-direction:column; gap:6px}
     .tbox label{font-size:12px; color:var(--muted)}
     .tbox input{
-      height:40px; min-width:190px; background:#0f1a2b; color:var(--text);
+      height:40px; min-width:190px; background:#0f1a2b; color:#fff;
       border-radius:10px; border:1px solid var(--line); padding:0 12px; font-weight:700; letter-spacing:.2px;
     }
     .tbox.small input{min-width:160px}
 
-    /* logo de tu marca a la derecha de la barra de totales */
-    .brand{ margin-left:auto; display:flex; align-items:center; }
-    .brand img{ height:46px; width:auto; display:block; background:transparent; }
+    .brandRight{ margin-left:auto; display:flex; align-items:center; }
+    .brandRight img{ height:46px; width:auto; display:block; background:transparent; }
 
-    /* colores intensos para % ganancia */
     .lvl-red{     background-color: rgba(var(--red-rgb), .55) !important;     border:1px solid rgba(var(--red-rgb), .9) !important;     color:#fff !important; }
     .lvl-yellow{  background-color: rgba(var(--yellow-rgb), .55) !important;  border:1px solid rgba(var(--yellow-rgb), .9) !important;  color:#0b0b0b !important; }
     .lvl-green{   background-color: rgba(var(--green-rgb), .55) !important;   border:1px solid rgba(var(--green-rgb), .9) !important;   color:#fff !important; }
@@ -75,82 +92,244 @@
     .right{display:flex; gap:10px; align-items:center}
     .muted{color:var(--muted)}
 
-    /* Responsive */
     @media (max-width: 680px){
       .titleLogo{ height:20px; }
-      .brand img{ height:36px; }
+      .brandRight img{ height:36px; }
+    }
+
+    /* ===== Sección Gráficos ===== */
+    .g-controls{
+      display:grid;gap:var(--gap);
+      grid-template-columns: repeat(12, 1fr);
+      align-items:end;margin-bottom:16px;
+      background:rgba(255,255,255,.03);
+      border:1px dashed var(--line);
+      border-radius:14px;padding:14px;
+    }
+    .g-field{display:flex;flex-direction:column;gap:6px}
+    .g-inline{display:flex;gap:10px;flex-wrap:wrap;border:1px solid var(--line);border-radius:10px;padding:8px;background:#0f1a2b}
+    .g-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin:4px 0 2px;grid-column:1/-1}
+    .g-btn{appearance:none;border:1px solid var(--line);color:var(--text);background:#0f1a2b;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
+    .g-btn.primary{border:0;color:#001813;background:var(--accent)}
+    .g-kpis{display:grid;gap:var(--gap);grid-template-columns:repeat(4,1fr);margin:12px 0 18px}
+    .g-kpi{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:12px;padding:14px}
+    .g-kpi .label{font-size:12px;color:var(--muted);letter-spacing:.3px}
+    .g-kpi .value{font-weight:800;font-size:22px;margin-top:6px}
+    .chartBox{
+      height:360px;border:1px dashed rgba(255,255,255,.2);
+      border-radius:12px;display:flex;align-items:center;justify-content:center;color:var(--muted);
+      background:repeating-linear-gradient(45deg, rgba(255,255,255,.02) 0 6px, transparent 6px 12px);
+    }
+    .tableBox{margin-top:14px;border:1px dashed rgba(255,255,255,.2);border-radius:12px;padding:14px;color:var(--muted)}
+
+    .col-3{grid-column: span 3}
+    .col-4{grid-column: span 4}
+    .col-6{grid-column: span 6}
+    .col-12{grid-column: 1 / -1}
+    .hidden{display:none}
+
+    @media (max-width: 920px){
+      .g-kpis{grid-template-columns:repeat(2,1fr)}
+      .g-controls{grid-template-columns:repeat(6,1fr)}
+      .col-3{grid-column: span 3}
+      .col-4{grid-column: span 6}
+    }
+    @media (max-width: 600px){
+      .g-kpis{grid-template-columns:1fr}
+      .g-controls{grid-template-columns:repeat(4,1fr)}
+      .col-3,.col-4,.col-6{grid-column: 1 / -1}
     }
   </style>
 </head>
 <body>
+
+  <!-- ===== Barra superior única ===== -->
+  <header class="topbar">
+    <div class="brand">proyecto-ml</div>
+    <nav class="tabs">
+      <button id="tabBtnVentas" class="tab-btn active">Ventas (index)</button>
+      <button id="tabBtnGraficos" class="tab-btn">Gráficos</button>
+    </nav>
+  </header>
+
   <div class="wrap">
-    <div class="card">
-      <div class="hdr">
-        <!-- Título + logo de Mercado -->
-        <div class="title">
-          <h1>Ventas Mercado Libre</h1>
-          <img class="titleLogo" src="/img/mercado.png" alt="Mercado Libre" />
+    <!-- ===== PANEL: DASHBOARD (Ventas) ===== -->
+    <section id="panel-dashboard" class="panel" aria-label="Ventas">
+      <div class="card">
+        <div class="hdr">
+          <div class="title">
+            <h1>Ventas Mercado Libre</h1>
+            <img class="titleLogo" src="/img/mercado.png" alt="Mercado Libre" />
+          </div>
+
+          <div class="controls">
+            <div>
+              <label for="from">Desde</label><br/>
+              <input id="from" type="date">
+            </div>
+            <div>
+              <label for="to">Hasta</label><br/>
+              <input id="to" type="date">
+            </div>
+            <button id="loadBtn">Cargar</button>
+            <a id="csvBtn" class="btn secondary" href="#" download>Descargar CSV</a>
+          </div>
+
+          <div class="right">
+            <div class="meta" id="metaBox">
+              <span id="rangeLabel" class="muted">Rango: —</span> · <b id="countLabel">Ventas: 0</b>
+            </div>
+          </div>
         </div>
 
-        <div class="controls">
-          <div>
-            <label for="from">Desde</label><br/>
-            <input id="from" type="date">
+        <!-- Totales -->
+        <div class="totalsbar">
+          <div class="tbox">
+            <label>Neto total</label>
+            <input id="sumNeto" readonly>
           </div>
-          <div>
-            <label for="to">Hasta</label><br/>
-            <input id="to" type="date">
+          <div class="tbox">
+            <label>Costo total</label>
+            <input id="sumCosto" readonly>
           </div>
-          <button id="loadBtn">Cargar</button>
-          <a id="csvBtn" class="btn secondary" href="#" download>Descargar CSV</a>
+          <div class="tbox">
+            <label>Ganancia (Neto − Costo)</label>
+            <input id="sumGanancia" readonly>
+          </div>
+          <div class="tbox small">
+            <label>Promedio % ganancia</label>
+            <input id="avgPct" readonly>
+          </div>
+
+          <div class="brandRight">
+            <img src="/img/revolucion.png" alt="Revolución Motos" />
+          </div>
         </div>
 
-        <div class="right">
-          <!-- Bloque que se reemplaza por "Cargando..." -->
-          <div class="meta" id="metaBox">
-            <span id="rangeLabel" class="muted">Rango: —</span> · <b id="countLabel">Ventas: 0</b>
-          </div>
+        <div class="scroller">
+          <table class="tbl" id="grid">
+            <thead><tr id="thead"></tr></thead>
+            <tbody id="tbody"><tr><td class="muted" colspan="99">Sin datos.</td></tr></tbody>
+          </table>
         </div>
       </div>
+    </section>
 
-      <!-- Totales -->
-      <div class="totalsbar">
-        <div class="tbox">
-          <label>Neto total</label>
-          <input id="sumNeto" readonly>
-        </div>
-        <div class="tbox">
-          <label>Costo total</label>
-          <input id="sumCosto" readonly>
-        </div>
-        <div class="tbox">
-          <label>Ganancia (Neto − Costo)</label>
-          <input id="sumGanancia" readonly>
-        </div>
-        <div class="tbox small">
-          <label>Promedio % ganancia</label>
-          <input id="avgPct" readonly>
+    <!-- ===== PANEL: GRÁFICOS ===== -->
+    <section id="panel-graficos" class="panel" aria-label="Gráficos" hidden>
+      <div class="card" style="padding:16px">
+        <h2 style="margin:0 0 10px 0;font-size:16px">Gráficos comparativos</h2>
+
+        <div class="g-controls">
+          <div class="g-field col-3">
+            <label for="gAFrom">Periodo A — Desde</label>
+            <input id="gAFrom" type="date" placeholder="aaaa-mm-dd">
+          </div>
+          <div class="g-field col-3">
+            <label for="gATo">Periodo A — Hasta</label>
+            <input id="gATo" type="date" placeholder="aaaa-mm-dd">
+          </div>
+          <div class="g-field col-3">
+            <label for="gBFrom">Periodo B — Desde</label>
+            <input id="gBFrom" type="date" placeholder="aaaa-mm-dd">
+          </div>
+          <div class="g-field col-3">
+            <label for="gBTo">Periodo B — Hasta</label>
+            <input id="gBTo" type="date" placeholder="aaaa-mm-dd">
+          </div>
+
+          <div class="g-field col-4">
+            <label for="gMetric">Métrica</label>
+            <select id="gMetric">
+              <option value="ventas" selected>Ventas (cantidad)</option>
+              <option value="visitas_item">Visitas (por item)</option>
+            </select>
+          </div>
+
+          <div id="fieldItemId" class="g-field col-6 hidden">
+            <label for="gItemId">Item ID (ej. MLA123…)</label>
+            <input id="gItemId" type="text" placeholder="MLA…">
+          </div>
+
+          <div class="g-field col-4">
+            <label for="gGroupBy">Agrupar por</label>
+            <select id="gGroupBy">
+              <option value="day" selected>Día</option>
+              <option value="week">Semana</option>
+              <option value="month">Mes</option>
+            </select>
+          </div>
+
+          <div class="g-field col-4">
+            <label>Alineación</label>
+            <div class="g-inline" aria-label="Alineación">
+              <label><input id="gAlignReal" type="radio" name="gAlign" value="real" checked> Fecha real</label>
+              <label><input id="gAlignIndexed" type="radio" name="gAlign" value="indexed"> Día 1..N</label>
+            </div>
+          </div>
+
+          <div class="g-field col-4">
+            <label>Estilo</label>
+            <div class="g-inline" aria-label="Estilo">
+              <label><input id="gShowPoints" type="checkbox"> Puntos</label>
+            </div>
+          </div>
+
+          <div class="g-actions">
+            <button id="gBtnTable" class="g-btn" disabled>Ver tabla</button>
+            <button id="gBtnCsv" class="g-btn" disabled>Descargar CSV</button>
+            <button id="gBtnPlot" class="g-btn primary">Ver gráfico</button>
+          </div>
         </div>
 
-        <!-- Logo de tu marca (revolucion.png) a la derecha -->
-        <div class="brand">
-          <img src="/img/revolucion.png" alt="Revolución Motos" />
+        <div class="g-kpis">
+          <div class="g-kpi"><div class="label">Total A</div><div id="kpiA" class="value">—</div></div>
+          <div class="g-kpi"><div class="label">Total B</div><div id="kpiB" class="value">—</div></div>
+          <div class="g-kpi"><div class="label">Δ Absoluta</div><div id="kpiDeltaAbs" class="value">—</div></div>
+          <div class="g-kpi"><div class="label">Δ %</div><div id="kpiDeltaPct" class="value">—</div></div>
         </div>
+
+        <div class="chartBox">
+          <canvas id="chartVentas" width="1000" height="360"></canvas>
+        </div>
+        <div id="gTableBox" class="tableBox">Aquí va el desglose en tabla</div>
       </div>
-
-      <div class="scroller">
-        <table class="tbl" id="grid">
-          <thead><tr id="thead"></tr></thead>
-          <tbody id="tbody"><tr><td class="muted" colspan="99">Sin datos.</td></tr></tbody>
-        </table>
-      </div>
-    </div>
+    </section>
   </div>
 
   <script>
+    /* ===== Tabs únicas (Ventas / Gráficos) ===== */
+    (function(){
+      const btnVentas = document.getElementById('tabBtnVentas');
+      const btnGraf   = document.getElementById('tabBtnGraficos');
+      const panelDash = document.getElementById('panel-dashboard');
+      const panelGraf = document.getElementById('panel-graficos');
+
+      function setTab(which){
+        const showDash = (which === 'dashboard'); // "Ventas"
+        btnVentas.classList.toggle('active',  showDash);
+        btnGraf.classList.toggle('active',   !showDash);
+        panelDash.hidden = !showDash;
+        panelGraf.hidden =  showDash;
+        try{ localStorage.setItem('ml.tab', which); }catch(e){}
+        const url = new URL(location.href);
+        url.searchParams.set('tab', which);
+        history.replaceState(null,'',url);
+      }
+
+      btnVentas.addEventListener('click', ()=> setTab('dashboard'));
+      btnGraf  .addEventListener('click', ()=> setTab('graficos'));
+
+      const params = new URLSearchParams(location.search);
+      const fromQS = params.get('tab');
+      const fromLS = (()=>{ try{ return localStorage.getItem('ml.tab'); }catch(e){ return null; }})();
+      const initial = (fromQS === 'graficos' || fromLS === 'graficos') ? 'graficos' : 'dashboard';
+      setTab(initial);
+    })();
+
+    /* ===== Utilidades formato (Dashboard) ===== */
     const $ = sel => document.querySelector(sel);
 
-    // $ ARS sin decimales
     function fmtMoneyARS0(n){
       if (n === '' || n === null || n === undefined) return '';
       const num = Number(n);
@@ -161,15 +340,11 @@
       for (let i = parts.length - 3; i > 0; i -= 3) parts.splice(i, 0, '.');
       return `${sign}$ ${parts.join('')}`;
     }
-
-    // % con 1 decimal
     function fmtPct1(n){
       const num = Number(n);
       if (!Number.isFinite(num)) return '';
       return `${num.toFixed(1)}%`;
     }
-
-    // Colores por % (solo para GANANCIA %)
     function classByPct(p){
       if (!(p > -Infinity)) return '';
       if (p < 40) return 'lvl-red';
@@ -182,37 +357,33 @@
       const cls = classByPct(p);
       if (cls) el.classList.add(cls);
     }
-
     function todayYMD(){
       const d = new Date(); const pad = n=>String(n).padStart(2,'0');
       return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
     }
-
-    // Render del bloque meta (rango + ventas)
     function renderMeta(from, to, count){
       const metaBox = $('#metaBox');
       metaBox.innerHTML = `<span id="rangeLabel" class="muted">Rango: ${from} → ${to}</span> · <b id="countLabel">Ventas: ${count}</b>`;
     }
 
-  (function init(){
-  const ymd = todayYMD();
-  $('#from').value = ymd;
-  $('#to').value   = ymd;
-  $('#loadBtn').addEventListener('click', loadData);
-  ['from','to'].forEach(id => $('#'+id).addEventListener('keydown', e => { if (e.key === 'Enter') loadData(); }));
-  // sin auto carga: el spinner aparece recién al apretar “Cargar”
-})();
-
+    // Init Dashboard inputs
+    (function init(){
+      const ymd = todayYMD();
+      $('#from').value = ymd;
+      $('#to').value   = ymd;
+      $('#loadBtn').addEventListener('click', loadData);
+      ['from','to'].forEach(id => $('#'+id).addEventListener('keydown', e => { if (e.key === 'Enter') loadData(); }));
+    })();
 
     const DEFAULT_DATE_BY = 'both';
 
+    // Carga de datos Dashboard
     async function loadData(){
       const from = $('#from').value;
       const to = $('#to').value;
       const loadBtn = $('#loadBtn');
       const metaBox = $('#metaBox');
 
-      // Mostrar estado "Cargando..." y deshabilitar botón
       metaBox.innerHTML = `<span class="spinner"></span><span class="muted">Cargando…</span>`;
       loadBtn.disabled = true;
 
@@ -229,11 +400,9 @@
         }
         const data = await resp.json();
 
-        // Actualizar link CSV recién cuando hay datos
         $('#csvBtn').href = `/orders.csv?${qs.toString()}&fmt=excel&locale=latam`;
 
-
-        // Header
+        // Headers
         const thead = $('#thead'); thead.innerHTML = '';
         (data.headers || []).forEach(h => {
           const th = document.createElement('th');
@@ -241,13 +410,14 @@
           thead.appendChild(th);
         });
 
+        // Rows
         const tbody = $('#tbody'); tbody.innerHTML = '';
         const rows = Array.isArray(data.rows) ? data.rows : [];
 
-        // índices (ver HEADERS del server)
-        const moneyCols = [3,4,5,7,9,10,11,12]; // columnas de dinero
-        const pctColsGainOnly = [6];            // SOLO GANANCIA %
-        const pctDiscountCol = 8;               // % DESCUENTO (sin colores)
+        // Columnas con formato
+        const moneyCols = [3,4,5,7,9,10,11,12];
+        const pctColsGainOnly = [6];
+        const pctDiscountCol = 8;
 
         let sumNeto = 0, sumCosto = 0, sumPct = 0, pctCount = 0;
 
@@ -268,7 +438,7 @@
               applyPctClass(td, p);
             } else if (j === pctDiscountCol){
               const p = Number(cell);
-              td.textContent = fmtPct1(p);   // sin colores
+              td.textContent = fmtPct1(p);
               td.style.textAlign = 'right';
             } else {
               td.textContent = (cell ?? '');
@@ -278,7 +448,6 @@
           });
           tbody.appendChild(tr);
 
-          // totales
           const neto = Number(row[4]) || 0;
           const costo = Number(row[5]) || 0;
           const pct  = Number(row[6]);
@@ -297,16 +466,327 @@
         $('#avgPct').value      = fmtPct1(promPct);
         applyPctClass($('#avgPct'), promPct);
 
-        // Mostrar rango + cantidad (reemplaza el “Cargando…”)
         renderMeta(from, to, rows.length);
       } catch (e){
         alert('Error de red cargando órdenes');
         metaBox.innerHTML = `<span class="muted">Error al cargar</span>`;
       } finally {
-        // Rehabilitar botón
         loadBtn.disabled = false;
       }
     }
+
+    /* ============================================================
+       ======   GRÁFICOS: Ventas y Visitas (canvas puro)      =====
+       ============================================================ */
+
+    // Helpers gráficos
+    const $g = sel => document.querySelector(sel);
+    const pad2 = n => String(n).padStart(2,'0');
+    const ymd = d => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+    function addDays(d, n){ const x = new Date(d); x.setDate(x.getDate()+n); return x; }
+    function startOfWeek(d){ const x=new Date(d); const wd=(x.getDay()+6)%7; x.setDate(x.getDate()-wd); x.setHours(0,0,0,0); return x; }
+    function startOfMonth(d){ const x=new Date(d.getFullYear(), d.getMonth(), 1); x.setHours(0,0,0,0); return x; }
+
+    // Prefill: últimos 30 días vs previos 30
+    (function initGraphDefaults(){
+      const hoy = new Date(); hoy.setHours(0,0,0,0);
+      const aTo   = addDays(hoy, 0);
+      const aFrom = addDays(hoy, -29);
+      const bTo   = addDays(aFrom, -1);
+      const bFrom = addDays(bTo, -29);
+
+      $g('#gAFrom').value = ymd(aFrom);
+      $g('#gATo').value   = ymd(aTo);
+      $g('#gBFrom').value = ymd(bFrom);
+      $g('#gBTo').value   = ymd(bTo);
+    })();
+
+    // UI: mostrar campo Item ID si la métrica es Visitas
+    (function bindMetricUI(){
+      const metricSel = $g('#gMetric');
+      const fieldItem = $g('#fieldItemId');
+      const groupSel  = $g('#gGroupBy');
+
+      function refresh(){
+        const isVisits = (metricSel.value === 'visitas_item');
+        fieldItem.classList.toggle('hidden', !isVisits);
+        groupSel.disabled = isVisits;   // visitas: sólo por día
+        if (isVisits) groupSel.value = 'day';
+      }
+      metricSel.addEventListener('change', refresh);
+      refresh();
+    })();
+
+    // Leer órdenes y agrupar por day/week/month → cuenta de ventas
+    async function fetchOrdersAgg({from, to, groupBy}) {
+      const qs = new URLSearchParams({ from, to, dateBy: 'both' });
+      const resp = await fetch(`/orders?${qs.toString()}`, {
+        headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' }
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+
+      const DATE_COL = 1; // FECHA
+
+      const map = new Map(); // key -> {label, count}
+      for (const row of rows) {
+        const raw = row[DATE_COL];
+        if (!raw) continue;
+        const d = new Date(raw);
+        if (isNaN(d)) continue;
+
+        let key, label;
+        if (groupBy === 'week') {
+          const w = startOfWeek(d);
+          key = `W:${ymd(w)}`; label = `Sem ${ymd(w)}`;
+        } else if (groupBy === 'month') {
+          const m = startOfMonth(d);
+          key = `M:${m.getFullYear()}-${pad2(m.getMonth()+1)}`;
+          label = `${pad2(m.getMonth()+1)}/${m.getFullYear()}`;
+        } else {
+          key = `D:${ymd(d)}`; label = ymd(d);
+        }
+
+        const prev = map.get(key) || { label, count: 0 };
+        prev.count += 1; map.set(key, prev);
+      }
+
+      const arr = Array.from(map.entries())
+        .sort((a,b)=> a[0] < b[0] ? -1 : 1)
+        .map(([,v])=> v);
+
+      const total = arr.reduce((s,x)=> s + x.count, 0);
+      return { series: arr, total };
+    }
+
+    // Leer visitas por item (día a día)
+    async function fetchVisitsAgg({itemId, from, to}) {
+      const qs = new URLSearchParams({ item_id: itemId, from, to });
+      const resp = await fetch(`/ml/visits?${qs.toString()}`);
+      if (!resp.ok){
+        const t = await resp.text().catch(()=> '');
+        throw new Error(`ML visits HTTP ${resp.status} ${t}`);
+      }
+      const data = await resp.json();
+      // data.series ya viene [{label:"YYYY-MM-DD", count:n}] ordenado
+      return { series: Array.isArray(data.series)? data.series : [], total: Number(data.total)||0 };
+    }
+
+    // Alineación: "indexed" (1..N con nulls) y "real" (por etiqueta)
+    function buildAlignedSeries(A, B, alignMode) {
+      if (alignMode === 'indexed') {
+        const len = Math.max(A.series.length, B.series.length);
+        const labels = Array.from({length: len}, (_,i)=> String(i+1));
+        const aVals = labels.map((_,i)=> (A.series[i] ? A.series[i].count : null));
+        const bVals = labels.map((_,i)=> (B.series[i] ? B.series[i].count : null));
+        return { labels, aVals, bVals };
+      }
+      const labelSet = new Set();
+      A.series.forEach(x=> labelSet.add(x.label));
+      B.series.forEach(x=> labelSet.add(x.label));
+      const labels = Array.from(labelSet).sort();
+      const aMap = new Map(A.series.map(x=> [x.label, x.count]));
+      const bMap = new Map(B.series.map(x=> [x.label, x.count]));
+      const aVals = labels.map(l=> aMap.has(l) ? aMap.get(l) : null);
+      const bVals = labels.map(l=> bMap.has(l) ? bMap.get(l) : null);
+      return { labels, aVals, bVals };
+    }
+
+    // KPIs
+    function setKpis(totalA, totalB){
+      const dAbs = totalA - totalB;
+      const dPct = totalB === 0 ? 0 : (dAbs / totalB * 100);
+      $g('#kpiA').textContent = totalA.toString();
+      $g('#kpiB').textContent = totalB.toString();
+      $g('#kpiDeltaAbs').textContent = (dAbs >= 0 ? '+' : '') + dAbs.toString();
+      $g('#kpiDeltaPct').textContent = (dPct>=0?'+':'') + dPct.toFixed(1) + '%';
+    }
+
+    // Tabla
+    function renderTable(labels, aVals, bVals, unitLabel){
+      const host = $g('#gTableBox');
+      const rows = labels.map((l,i)=> {
+        const av = Number.isFinite(aVals[i]) ? aVals[i] : '—';
+        const bv = Number.isFinite(bVals[i]) ? bVals[i] : '—';
+        return `<tr><td>${l}</td><td style="text-align:right">${av}</td><td style="text-align:right">${bv}</td></tr>`;
+      }).join('');
+      host.innerHTML = `
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th style="text-align:left;border-bottom:1px solid var(--line);padding:8px 6px">Período</th>
+              <th style="text-align:right;border-bottom:1px solid var(--line);padding:8px 6px">A (${unitLabel})</th>
+              <th style="text-align:right;border-bottom:1px solid var(--line);padding:8px 6px">B (${unitLabel})</th>
+            </tr>
+          </thead>
+          <tbody>${rows || `<tr><td colspan="3" class="muted" style="padding:8px 6px">Sin datos.</td></tr>`}</tbody>
+        </table>`;
+    }
+
+    // Gráfico canvas (líneas suaves A/B con cortes en null + puntos opcionales)
+    function drawLineChart(canvas, labels, aVals, bVals, opts={}){
+      const showPoints = !!opts.showPoints;
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0,0,W,H);
+
+      const ml=50, mr=20, mt=20, mb=40;
+      const innerW = W-ml-mr, innerH = H-mt-mb;
+
+      // redondeos
+      ctx.lineJoin = 'round';
+      ctx.lineCap  = 'round';
+      ctx.font = '12px system-ui, Segoe UI, Roboto, sans-serif';
+
+      const nums = arr => arr.filter(v => Number.isFinite(v));
+      const allVals = nums(aVals).concat(nums(bVals));
+      const maxY = Math.max(1, ...(allVals.length ? allVals : [1]));
+      const yTicks = Math.min(6, Math.max(1, Math.floor(maxY)));
+      const yStep = Math.max(1, Math.ceil(maxY / yTicks));
+
+      // grilla
+      ctx.strokeStyle = 'rgba(231,238,252,0.25)';
+      ctx.fillStyle   = 'rgba(231,238,252,0.6)';
+      ctx.lineWidth   = 1;
+
+      for(let y=0; y<=maxY; y+=yStep){
+        const py = mt + innerH - (y/maxY)*innerH;
+        ctx.beginPath(); ctx.moveTo(ml, py); ctx.lineTo(W-mr, py); ctx.stroke();
+        const t = String(y);
+        ctx.fillText(t, ml-8-ctx.measureText(t).width, py+3);
+      }
+
+      const denom = Math.max(1, labels.length-1);
+      const stepX = Math.max(1, Math.floor(labels.length / 12));
+      const xAt = i => ml + (i/denom)*innerW;
+      const yAt = v => mt + innerH - (v/maxY)*innerH;
+
+      labels.forEach((lab, i)=>{
+        if (i % stepX !== 0) return;
+        const x = xAt(i);
+        ctx.fillText(lab, x-ctx.measureText(lab).width/2, H-mb+16);
+      });
+
+      // helper: dividir en segmentos sin null
+      function segments(vals){
+        const segs=[]; let seg=[];
+        for (let i=0;i<vals.length;i++){
+          const v=vals[i];
+          if (Number.isFinite(v)) seg.push([xAt(i), yAt(v)]);
+          else if (seg.length){ segs.push(seg); seg=[]; }
+        }
+        if (seg.length) segs.push(seg);
+        return segs;
+      }
+
+      // Catmull-Rom → Bezier (t=1)
+      function drawSmooth(vals, stroke){
+        const segs = segments(vals);
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 2;
+
+        segs.forEach(points=>{
+          if (points.length === 1){
+            const [x,y] = points[0];
+            ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+0.1,y); ctx.stroke();
+            return;
+          }
+          if (points.length === 2){
+            ctx.beginPath(); ctx.moveTo(points[0][0], points[0][1]);
+            ctx.lineTo(points[1][0], points[1][1]); ctx.stroke();
+            return;
+          }
+          const t = 1.0;
+          ctx.beginPath();
+          ctx.moveTo(points[0][0], points[0][1]);
+          for (let i=0; i<points.length-1; i++){
+            const p0 = points[i-1] || points[i];
+            const p1 = points[i];
+            const p2 = points[i+1];
+            const p3 = points[i+2] || p2;
+
+            const cp1x = p1[0] + (p2[0] - p0[0]) * (t/6);
+            const cp1y = p1[1] + (p2[1] - p0[1]) * (t/6);
+            const cp2x = p2[0] - (p3[0] - p1[0]) * (t/6);
+            const cp2y = p2[1] - (p3[1] - p1[1]) * (t/6);
+
+            ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2[0], p2[1]);
+          }
+          ctx.stroke();
+        });
+      }
+
+      // puntos
+      function drawPoints(vals, fill){
+        ctx.fillStyle = fill;
+        for (let i=0;i<vals.length;i++){
+          const v = vals[i];
+          if (!Number.isFinite(v)) continue;
+          const x = xAt(i), y = yAt(v);
+          ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI*2); ctx.fill();
+        }
+      }
+
+      // A y B
+      drawSmooth(aVals, 'rgba(0,194,168,0.95)');   // A
+      drawSmooth(bVals, 'rgba(142,36,170,0.9)');   // B
+
+      if (showPoints){
+        drawPoints(aVals, 'rgba(0,194,168,1)');
+        drawPoints(bVals, 'rgba(142,36,170,1)');
+      }
+
+      // leyenda
+      const lx = W - mr - 120, ly = mt + 6;
+      ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(lx-8, ly-12, 120, 32);
+      ctx.fillStyle = 'rgba(231,238,252,0.85)';
+      ctx.fillText('A', lx+18, ly); ctx.fillText('B', lx+18, ly+14);
+      ctx.strokeStyle='rgba(0,194,168,0.95)'; ctx.beginPath(); ctx.moveTo(lx, ly-3); ctx.lineTo(lx+12, ly-3); ctx.stroke();
+      ctx.strokeStyle='rgba(142,36,170,0.9)'; ctx.beginPath(); ctx.moveTo(lx, ly+11); ctx.lineTo(lx+12, ly+11); ctx.stroke();
+    }
+
+    // Click: Ver gráfico
+    $g('#gBtnPlot').addEventListener('click', async ()=>{
+      const Afrom = $g('#gAFrom').value;
+      const Ato   = $g('#gATo').value;
+      const Bfrom = $g('#gBFrom').value;
+      const Bto   = $g('#gBTo').value;
+      if(!Afrom || !Ato || !Bfrom || !Bto){
+        alert('Completá las fechas de ambos periodos.');
+        return;
+      }
+
+      const metric = $g('#gMetric').value;              // ventas | visitas_item
+      const groupBy = $g('#gGroupBy').value;            // day|week|month (ventas)
+      const align   = $g('#gAlignIndexed').checked ? 'indexed' : 'real';
+      const showPts = $g('#gShowPoints').checked;
+
+      try{
+        let A, B, unitLabel = 'ventas';
+
+        if (metric === 'visitas_item'){
+          const itemId = $g('#gItemId').value.trim();
+          if (!itemId){ alert('Ingresá el Item ID para “Visitas”.'); return; }
+          A = await fetchVisitsAgg({ itemId, from: Afrom, to: Ato });
+          B = await fetchVisitsAgg({ itemId, from: Bfrom, to: Bto });
+          unitLabel = 'visitas';
+        } else {
+          A = await fetchOrdersAgg({ from: Afrom, to: Ato, groupBy });
+          B = await fetchOrdersAgg({ from: Bfrom, to: Bto, groupBy });
+        }
+
+        const { labels, aVals, bVals } = buildAlignedSeries(A, B, align);
+        setKpis(A.total, B.total);
+        renderTable(labels, aVals, bVals, unitLabel);
+
+        const canvas = $g('#chartVentas');
+        drawLineChart(canvas, labels, aVals, bVals, { showPoints: showPts });
+      } catch(err){
+        console.error(err);
+        alert('No se pudieron obtener datos para el gráfico.');
+      }
+    });
   </script>
 </body>
 </html>

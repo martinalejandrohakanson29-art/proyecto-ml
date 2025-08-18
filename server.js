@@ -50,6 +50,7 @@ function dateWithOffset(raw, endOfDay) {
   const time = endOfDay ? '23:59:59.999' : '00:00:00.000';
   return new Date(`${iso}T${time}${TZ_OFFSET}`);
 }
+
 function parseRangeAR(q) {
   const fromD = dateWithOffset(q.from, false);
   const toD   = dateWithOffset(q.to ?? q.until, true);
@@ -384,6 +385,69 @@ function applyShippingSplit(items) {
     arr.forEach(it => recomputeNetoYGanancia(it.row));
   }
 }
+
+// ===== ML: visitas por item (agrupadas por día) =====
+function diffDaysInclusive(fromYMD, toYMD){
+  const a = new Date(fromYMD+'T00:00:00.000Z');
+  const b = new Date(toYMD  +'T00:00:00.000Z');
+  return Math.max(1, Math.round((b - a) / 86400000) + 1); // inclusivo
+}
+
+app.get('/ml/visits', async (req, res) => {
+  try{
+    const item_id = String(req.query.item_id || '').trim();
+    const from    = String(req.query.from || '').trim();  // YYYY-MM-DD
+    const to      = String(req.query.to   || '').trim();  // YYYY-MM-DD
+    if (!item_id || !from || !to){
+      return res.status(400).json({ error: 'Falta item_id, from o to (YYYY-MM-DD)' });
+    }
+
+    const last   = diffDaysInclusive(from, to);     // 1..N días
+    const ending = `${to}T23:59:59.999Z`;           // cierre de ventana
+
+    // Reusamos tu helper que ya lee de ENV/Sheets y cachea
+    const token = await getTokenFromSheetsCached();
+
+    const url = `https://api.mercadolibre.com/items/${encodeURIComponent(item_id)}/visits/time_window` +
+                `?last=${last}&unit=day&ending=${encodeURIComponent(ending)}`;
+
+    const r = await axios.get(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 10000,
+    });
+
+    const api = r.data || {};
+    let series = Array.isArray(api.results) ? api.results.map(r => {
+      const d  = new Date(r.date);
+      const y  = d.getUTCFullYear();
+      const m  = String(d.getUTCMonth()+1).padStart(2,'0');
+      const dd = String(d.getUTCDate()).padStart(2,'0');
+      return { label: `${y}-${m}-${dd}`, count: Number(r.total)||0 };
+    }) : [];
+
+    // 🔧 Recortar al rango [from..to] y ordenar asc
+    series = series
+      .filter(x => x.label >= from && x.label <= to)
+      .sort((a,b) => a.label.localeCompare(b.label));
+
+    const total = series.reduce((s,x)=> s + x.count, 0);
+
+    res.json({
+      item_id, from, to, unit:'day', last, ending,
+      total, series,
+      source: 'meli/items/visits/time_window'
+    });
+  } catch(err){
+    if (err.response) {
+      return res.status(err.response.status).json({
+        error: 'ML visits error',
+        detail: err.response.data
+      });
+    }
+    console.error('ml/visits error', err);
+    res.status(500).json({ error: 'internal', detail: String(err?.message || err) });
+  }
+});
 
 // ===== Debug crudo =====
 app.get('/debug/orders-raw', async (req, res) => {
