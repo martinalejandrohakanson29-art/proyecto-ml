@@ -739,11 +739,12 @@ app.get('/orders', async (req, res) => {
       let payments = order?.payments || [];
       let paidMs = getPaidMs(order, payments);
 
-      if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && FETCH_PAYMENTS_DEFAULT) {
-        if (fetchPayments) {
-          try { payments = await getOrderPayments(order?.id); } catch {}
-          paidMs = getPaidMs(order, payments);
-        }
+      // usar fetchPayments (del query) en la condición
+if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
+  try { payments = await getOrderPayments(order?.id); } catch {}
+  paidMs = getPaidMs(order, payments);
+}
+
       }
 
       let shipmentData = null;
