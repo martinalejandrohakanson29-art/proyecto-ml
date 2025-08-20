@@ -136,6 +136,39 @@ function fixRowNETO(row){
   return row;
 }
 
+/**
+ * === Fallback: separar IMPUESTO de CARGO mirando payments ===
+ * Busca en payments[].fee_details líneas con "iva / impuesto / tax"
+ * y usa payments[].taxes_amount si viene. Devuelve { cargoVenta, impuesto, installments }.
+ */
+function splitFeesAndTaxesFromPayments(payments = []) {
+  let feeTotal = 0;
+  let taxFromFees = 0;
+  let taxesAmountField = 0;
+  let installments = 1;
+
+  for (const p of payments) {
+    if (p && typeof p.installments === 'number') {
+      installments = p.installments || installments;
+    }
+    const fds = Array.isArray(p?.fee_details) ? p.fee_details : [];
+    for (const fd of fds) {
+      const amt = Number(fd?.amount) || 0;
+      feeTotal += amt;
+      const name = String(fd?.type || fd?.name || '').toLowerCase();
+      if (name.includes('iva') || name.includes('impuesto') || name.includes('tax')) {
+        taxFromFees += amt;
+      }
+    }
+    if (Number(p?.taxes_amount) > 0) {
+      taxesAmountField += Number(p.taxes_amount);
+    }
+  }
+  const impuesto = taxesAmountField > 0 ? taxesAmountField : taxFromFees;
+  const cargoVenta = Math.max(0, round2(feeTotal - taxFromFees));
+  return { cargoVenta: round2(cargoVenta), impuesto: round2(impuesto), installments };
+}
+
 // ===== MP taxes (opcional)
 async function computeTaxesFromMercadoPago(payments = []) {
   const mpToken = process.env.MP_ACCESS_TOKEN;
@@ -450,23 +483,52 @@ function requireRole(roles) {
   };
 }
 
-// ====== ENDPOINTS DE AUTH
+// ====== ENDPOINTS DE AUTH (robustos)
 app.post('/auth/login', async (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ error: 'missing_fields' });
-  const user = await verifyPassword(email, password);
-  if (!user) return res.status(401).json({ error: 'invalid_credentials' });
-  req.session.user = user;
-  res.json({ ok: true, user });
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'missing_fields' });
+
+    const user = await verifyPassword(email, password);
+    if (!user) return res.status(401).json({ error: 'invalid_credentials' });
+
+    // Evita fijación de sesión
+    req.session.regenerate(err => {
+      if (err) return res.status(500).json({ error: 'session_regenerate_failed' });
+      req.session.user = user;
+      res.set('Cache-Control', 'no-store');
+      res.json({ ok: true, user });
+    });
+  } catch {
+    res.status(500).json({ error: 'internal' });
+  }
 });
+
 app.post('/auth/logout', (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
+  const finish = () => {
+    res.clearCookie('connect.sid', {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: IN_PROD, // usa true en Render (HTTPS)
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json({ ok: true });
+  };
+  if (req.session) {
+    req.session.destroy(() => finish());
+  } else {
+    finish();
+  }
 });
+
 app.get('/auth/me', (req, res) => {
   const u = req.session?.user;
   if (!u) return res.status(401).json({ error: 'auth_required' });
+  res.set('Cache-Control', 'no-store');
   res.json({ user: u });
 });
+
 
 // ====== GUARDAS POR ROL
 app.use(['/orders', '/orders.csv'], requireRole(['VENTAS', 'ADMIN']));
@@ -690,13 +752,38 @@ app.get('/orders', async (req, res) => {
         if (shipId) { try { shipmentData = await getShipment(shipId); } catch {} }
       }
 
+      // Impuestos vía MP (si hay token) — se usa sólo como refuerzo
       let taxesFromMp = null;
       if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
         try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
       }
 
+      // Row base (usa tu map original)
       const row = mapOrderToGridRow(order, payments, shipmentData, costsMap, taxesFromMp);
+
+      // === Fallback: separar impuestos y ajustar cargo/neto si IMPUESTO está en 0 ===
+      const { cargoVenta, impuesto, installments } = splitFeesAndTaxesFromPayments(payments);
+      const cargoRow = toNum(row[IDX.CARGO]);
+      const impRow   = toNum(row[IDX.IMPUESTO]);
+
+      if (impuesto > 0 && impRow <= 0) {
+        // movemos esa parte desde CARGO → IMPUESTO (si cargo alcanza)
+        if (cargoRow >= impuesto) {
+          row[IDX.CARGO]    = round2(cargoRow - impuesto);
+          row[IDX.IMPUESTO] = round2(impuesto);
+        } else {
+          // En casos raros, si CARGO es 0 pero sabemos de impuestos, al menos mostrar IMPUESTO
+          row[IDX.IMPUESTO] = round2(impuesto);
+        }
+      }
+
+      // Recalcular NETO y % ganancia con los valores ajustados
       fixRowNETO(row);
+      const cost = toNum(row[IDX.COSTO]);
+      const neto = toNum(row[IDX.NETO]);
+      if (cost > 0 && neto && IDX.GANANCIA >= 0) {
+        row[IDX.GANANCIA] = round1(((neto - cost) / cost) * 100);
+      }
 
       const pivot = (dateBy === 'created') ? 'created' : (dateBy === 'paid') ? 'paid'
         : (Number.isFinite(paidMs) ? 'paid' : 'created');
