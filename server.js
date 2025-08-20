@@ -687,7 +687,11 @@ app.get('/orders', async (req, res) => {
     }
     if (DEBUG_ORDERS) console.log('[orders] ISO efectivos →', { searchFromISO, searchToISO, dateBy });
 
-    const includeShipment = (req.query.includeShipment ?? '').length ? (req.query.includeShipment === 'true') : INCLUDE_SHIPMENT_DEFAULT;
+    const includeShipment =
+      (req.query.includeShipment !== undefined)
+        ? (String(req.query.includeShipment).toLowerCase() === 'true')
+        : INCLUDE_SHIPMENT_DEFAULT;
+
     const fetchPayments = req.query.fetchPayments === 'true' || FETCH_PAYMENTS_DEFAULT;
 
     // Búsqueda por IDs directos (order o pack)
@@ -740,11 +744,9 @@ app.get('/orders', async (req, res) => {
       let paidMs = getPaidMs(order, payments);
 
       // usar fetchPayments (del query) en la condición
-if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
-  try { payments = await getOrderPayments(order?.id); } catch {}
-  paidMs = getPaidMs(order, payments);
-}
-
+      if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
+        try { payments = await getOrderPayments(order?.id); } catch {}
+        paidMs = getPaidMs(order, payments);
       }
 
       let shipmentData = null;
