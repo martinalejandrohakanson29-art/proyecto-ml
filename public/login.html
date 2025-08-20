@@ -34,8 +34,7 @@
       border-top-color: var(--accent); border-radius:50%; animation: spin .8s linear infinite; vertical-align:middle; margin-right:8px;
     }
     @keyframes spin{ to{ transform: rotate(360deg); } }
-[hidden]{ display:none !important; }
-
+    [hidden]{ display:none !important; }
   </style>
 </head>
 <body>
@@ -78,10 +77,10 @@
     // Si ya hay sesión, redirigimos directo al index
     (async function checkMe(){
       try{
-        const r = await fetch('/auth/me');
+        const r = await fetch('/auth/me', { credentials: 'include' });
         if (r.ok) {
           meBox.textContent = 'Sesión activa';
-          location.replace('/'); // va a servir index.html
+          location.replace('/'); // sirve index.html
           return;
         }
       }catch{}
@@ -105,7 +104,8 @@
         const r = await fetch('/auth/login', {
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
+          credentials: 'include' // ← guarda la cookie de sesión
         });
         if (!r.ok){
           if (r.status === 401) err.textContent = 'Credenciales inválidas.';

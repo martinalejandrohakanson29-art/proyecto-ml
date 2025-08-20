@@ -111,11 +111,7 @@
     .modal .formrow{ display:flex; flex-direction:column; gap:6px; margin:8px 0; }
     .modal .actions{ display:flex; gap:10px; justify-content:flex-end; margin-top:10px; }
     .hidden{ display:none !important; }
-/* Fuerza que cualquier [hidden] se oculte */
-[hidden]{ display:none !important; }
-/* Y por si elegimos clase: */
-.modal.hidden{ display:none !important; }
-
+    [hidden]{ display:none !important; } /* fuerza ocultar cualquier [hidden] */
   </style>
 </head>
 <body>
@@ -322,7 +318,7 @@
     </section>
   </div>
 
-  <!-- ===== Overlay de Login (fuera del <script>) ===== -->
+  <!-- ===== Overlay de Login (para fallback) ===== -->
   <div id="loginModal" class="modal" hidden>
     <div class="card">
       <h3>Ingresar</h3>
@@ -353,7 +349,6 @@
       const panelVentas = document.getElementById('panel-ventas');
       const panelEnvios = document.getElementById('panel-envios');
 
-      // Entrar desde tarjetas del Home
       document.getElementById('goVentas')?.addEventListener('click', ()=> setMainTab('ventas'));
       document.getElementById('goEnvios')?.addEventListener('click', ()=> setMainTab('envios'));
 
@@ -453,13 +448,12 @@
     const DEFAULT_DATE_BY = 'both';
 
     async function loadData(){
-        // 1) leer valores actuales de los inputs
-  let from = $('#from').value?.trim();
-  let to   = $('#to').value?.trim();
+      // asegurar fechas válidas
+      let from = $('#from').value?.trim();
+      let to   = $('#to').value?.trim();
+      if (!from) { from = todayYMD(); $('#from').value = from; }
+      if (!to)   { to   = todayYMD(); $('#to').value   = to; }
 
-  // 2) fallback: si están vacíos, usar hoy y reflejarlo en los inputs
-  if (!from) { from = todayYMD(); $('#from').value = from; }
-  if (!to)   { to   = todayYMD(); $('#to').value   = to; }
       const loadBtn = $('#loadBtn');
       const metaBox = $('#metaBox');
 
@@ -470,7 +464,10 @@
       const url = `/orders?${qs.toString()}`;
 
       try{
-        const resp = await fetch(url, { headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' }});
+        const resp = await fetch(url, {
+          headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' },
+          credentials: 'include' // ← manda cookie de sesión
+        });
         if (!resp.ok){
           const t = await resp.text().catch(()=> '');
           alert('Error cargando órdenes: ' + resp.status + ' ' + t);
@@ -566,7 +563,10 @@
 
     async function fetchOrdersAgg({from, to, groupBy}) {
       const qs = new URLSearchParams({ from, to, dateBy: 'both' });
-      const resp = await fetch(`/orders?${qs.toString()}`, { headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' }});
+      const resp = await fetch(`/orders?${qs.toString()}`, {
+        headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' },
+        credentials: 'include' // ← cookie
+      });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       const rows = Array.isArray(data.rows) ? data.rows : [];
@@ -589,7 +589,7 @@
 
     async function fetchVisitsAgg({itemId, from, to}) {
       const qs = new URLSearchParams({ item_id: itemId, from, to });
-      const resp = await fetch(`/ml/visits?${qs.toString()}`);
+      const resp = await fetch(`/ml/visits?${qs.toString()}`, { credentials: 'include' });
       if (!resp.ok){ const t = await resp.text().catch(()=> ''); throw new Error(`ML visits HTTP ${resp.status} ${t}`); }
       const data = await resp.json();
       return { series: Array.isArray(data.series)? data.series : [], total: Number(data.total)||0 };
@@ -641,6 +641,33 @@
         </table>`;
     }
 
+    $g('#gBtnPlot').addEventListener('click', async ()=>{
+      const Afrom = $g('#gAFrom').value, Ato = $g('#gATo').value, Bfrom = $g('#gBFrom').value, Bto = $g('#gBTo').value;
+      if(!Afrom || !Ato || !Bfrom || !Bto){ alert('Completá las fechas de ambos periodos.'); return; }
+      const metric = $g('#gMetric').value, groupBy = $g('#gGroupBy').value, align = $g('#gAlignIndexed').checked ? 'indexed' : 'real', showPts = $g('#gShowPoints').checked;
+      try{
+        let A, B, unitLabel = 'ventas';
+        if (metric === 'visitas_item'){
+          const itemId = $g('#gItemId').value.trim(); if (!itemId){ alert('Ingresá el Item ID para “Visitas”.'); return; }
+          A = await fetchVisitsAgg({ itemId, from: Afrom, to: Ato });
+          B = await fetchVisitsAgg({ itemId, from: Bfrom, to: Bto });
+          unitLabel = 'visitas';
+        } else {
+          A = await fetchOrdersAgg({ from: Afrom, to: Ato, groupBy });
+          B = await fetchOrdersAgg({ from: Bfrom, to: Bto, groupBy });
+        }
+        const { labels, aVals, bVals } = buildAlignedSeries(A, B, align);
+        setKpis(A.total, B.total); renderTable(labels, aVals, bVals, unitLabel);
+
+        // Dibujo
+        const canvas = $g('#chartVentas');
+        drawLineChart(canvas, labels, aVals, bVals, { showPoints: showPts });
+      } catch(err){
+        console.error(err);
+        alert('No se pudieron obtener datos para el gráfico.');
+      }
+    });
+
     function drawLineChart(canvas, labels, aVals, bVals, opts={}){
       const showPoints = !!opts.showPoints;
       const ctx = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
@@ -672,22 +699,7 @@
       ctx.strokeStyle='rgba(142,36,170,0.9)'; ctx.beginPath(); ctx.moveTo(lx,ly+11); ctx.lineTo(lx+12,ly+11); ctx.stroke();
     }
 
-    $g('#gBtnPlot').addEventListener('click', async ()=>{
-      const Afrom = $g('#gAFrom').value, Ato = $g('#gATo').value, Bfrom = $g('#gBFrom').value, Bto = $g('#gBTo').value;
-      if(!Afrom || !Ato || !Bfrom || !Bto){ alert('Completá las fechas de ambos periodos.'); return; }
-      const metric = $g('#gMetric').value, groupBy = $g('#gGroupBy').value, align = $g('#gAlignIndexed').checked ? 'indexed' : 'real', showPts = $g('#gShowPoints').checked;
-      try{
-        let A, B, unitLabel = 'ventas';
-        if (metric === 'visitas_item'){ const itemId = $g('#gItemId').value.trim(); if (!itemId){ alert('Ingresá el Item ID para “Visitas”.'); return; }
-          A = await fetchVisitsAgg({ itemId, from: Afrom, to: Ato }); B = await fetchVisitsAgg({ itemId, from: Bfrom, to: Bto }); unitLabel = 'visitas';
-        } else { A = await fetchOrdersAgg({ from: Afrom, to: Ato, groupBy }); B = await fetchOrdersAgg({ from: Bfrom, to: Bto, groupBy }); }
-        const { labels, aVals, bVals } = buildAlignedSeries(A, B, align);
-        setKpis(A.total, B.total); renderTable(labels, aVals, bVals, unitLabel);
-        drawLineChart($g('#chartVentas'), labels, aVals, bVals, { showPoints: showPts });
-      } catch(err){ console.error(err); alert('No se pudieron obtener datos para el gráfico.'); }
-    });
-
-    /* ====== Gestión de envíos: UI (demo / lista + selección) ====== */
+    /* ====== Gestión de envíos: UI (demo) ====== */
     (function(){
       const el = {
         tab: document.getElementById('panel-envios'),
@@ -747,7 +759,7 @@
       function syncSelectAll(){ const total = state.rows.length, sel = state.selected.size; el.selectAll.indeterminate = sel > 0 && sel < total; el.selectAll.checked = sel === total && total > 0; }
 
       el.load.addEventListener('click', async () => {
-        // Reemplazar por fetch('/ml/labels/pending') cuando esté el endpoint
+        // Reemplazar por fetch('/ml/labels/pending', { credentials: 'include' }) cuando esté el endpoint
         state.rows = DEMO;
         state.selected.clear();
         renderTable();
@@ -764,6 +776,7 @@
         const ids = [...state.selected]; const withSlip = el.addSlip.checked;
         alert(`Imprimir ${ids.length} pedidos.\nAgregado: ${withSlip ? 'Sí' : 'No'}\nIDs: ${ids.join(', ')}`);
         // Próximo: POST /ml/labels/print -> PDF
+        // fetch('/ml/labels/print', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ ids, withSlip }), credentials:'include' })
       });
 
       renderTable();
@@ -791,7 +804,7 @@
 
       async function getMe(){
         try{
-          const r = await fetch('/auth/me');
+          const r = await fetch('/auth/me', { credentials: 'include' });
           if (!r.ok) return null;
           const { user } = await r.json();
           return user;
@@ -804,11 +817,9 @@
         const canVentas = has(roles, 'VENTAS');
         const canEnvios = has(roles, 'ENVIOS');
 
-        // Mostrar/ocultar botones de tabs principales
         el.tabVentas.style.display = canVentas ? '' : 'none';
         el.tabEnvios.style.display = canEnvios ? '' : 'none';
 
-        // Header de sesión
         if (user){
           el.uemail.textContent = user.email;
           el.uemail.style.display = '';
@@ -820,7 +831,6 @@
           el.open.style.display = '';
         }
 
-        // Si la pestaña activa quedó oculta, redirigí a una visible
         const active = document.querySelector('.tab-btn.active');
         if (active && active.style.display === 'none'){
           if (canVentas) el.tabVentas.click();
@@ -845,7 +855,8 @@
           const r = await fetch('/auth/login', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ email, password })
+            body: JSON.stringify({ email, password }),
+            credentials: 'include'
           });
           if (!r.ok){
             await r.text().catch(()=> '');
@@ -863,19 +874,16 @@
       }
 
       el.logout?.addEventListener('click', async ()=>{
-        try{ await fetch('/auth/logout', { method:'POST' }); }catch{}
-        // Limpiar UI y volver a Inicio
+        try{ await fetch('/auth/logout', { method:'POST', credentials:'include' }); }catch{}
         applyRoles(null);
         document.getElementById('tabBtnHome')?.click();
-        showModal(true); // pedir login nuevamente
+        showModal(true);
       });
 
       // Al cargar: chequeo de sesión y gating inicial
       (async function initAuthUI(){
         const user = await getMe();
         applyRoles(user);
-        // Como este index sólo se sirve si hay sesión, normalmente user != null.
-        // Si por alguna razón no hay, mostramos el modal.
         if (!user){
           el.tabVentas.style.display = 'none';
           el.tabEnvios.style.display = 'none';
