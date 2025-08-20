@@ -1,0 +1,12 @@
+{
+  "users": [
+    {
+      "id": "mej1ln3p",
+      "email": "admin@tu.com",
+      "passHash": "$2b$10$WqbsRDvYYasWnoAdfhOHNeCWkiJVGQu1RN/wJI2oWPkHcKio/ux9q",
+      "roles": [
+        "ADMIN"
+      ]
+    }
+  ]
+}

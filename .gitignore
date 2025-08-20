@@ -52,6 +52,8 @@ tmp/
 *.swp
 .history/
 
-.env
-credentials/
-credentials/service-account.json
+# (Opcional) si tenés archivos de datos de runtime, ignorá SOLO esos:
+# data/*.db
+# data/*.sqlite
+# data/*.local.json
+

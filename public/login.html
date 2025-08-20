@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Ingresar — proyecto-ml</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{
+      --bg:#0f1623; --panel:#131c2b; --muted:#8ea3c2; --text:#e7eefc; --accent:#00c2a8; --line:#203049;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell; background:var(--bg); color:var(--text);}
+    .wrap{min-height:100%; display:grid; place-items:center; padding:24px}
+    .card{width:100%; max-width:380px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:0 8px 24px rgba(0,0,0,.25)}
+    h1{margin:0 0 12px 0; font-size:18px}
+    p.muted{margin:0 0 14px 0; color:var(--muted); font-size:13px}
+    .row{display:flex; flex-direction:column; gap:6px; margin:10px 0}
+    label{font-size:12px; color:var(--muted)}
+    input{
+      height:40px; border-radius:10px; border:1px solid var(--line); background:#0f1a2b; color:#fff; padding:0 12px; outline:none;
+    }
+    button{
+      height:40px; border-radius:10px; border:none; background:var(--accent); color:#001813; font-weight:700; cursor:pointer;
+    }
+    button:disabled{opacity:.7; cursor:not-allowed}
+    .err{min-height:18px; color:#ffb4b4; font-size:13px; margin:6px 0 0}
+    .top{display:flex; align-items:center; justify-content:space-between; gap:8px}
+    .brand{font-weight:700}
+    .right{font-size:12px; color:var(--muted)}
+    .hint{font-size:12px; color:var(--muted); margin-top:8px}
+    .spinner{
+      display:inline-block; width:14px; height:14px; border:2px solid rgba(231,238,252,.25);
+      border-top-color: var(--accent); border-radius:50%; animation: spin .8s linear infinite; vertical-align:middle; margin-right:8px;
+    }
+    @keyframes spin{ to{ transform: rotate(360deg); } }
+[hidden]{ display:none !important; }
+
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="top">
+        <div class="brand">proyecto-ml</div>
+        <div class="right" id="meBox"></div>
+      </div>
+      <h1>Ingresar</h1>
+      <p class="muted">Accedé con tu email y contraseña para continuar.</p>
+
+      <form id="form">
+        <div class="row">
+          <label for="email">Email</label>
+          <input id="email" type="email" placeholder="usuario@tu.com" required />
+        </div>
+        <div class="row">
+          <label for="pass">Contraseña</label>
+          <input id="pass" type="password" placeholder="••••••••" required />
+        </div>
+        <div class="row">
+          <button id="submit" type="submit">Entrar</button>
+        </div>
+        <div id="err" class="err"></div>
+        <div class="hint">Si no tenés usuario, pedile alta al administrador.</div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const $ = s => document.querySelector(s);
+    const meBox = $('#meBox');
+    const form  = $('#form');
+    const email = $('#email');
+    const pass  = $('#pass');
+    const btn   = $('#submit');
+    const err   = $('#err');
+
+    // Si ya hay sesión, redirigimos directo al index
+    (async function checkMe(){
+      try{
+        const r = await fetch('/auth/me');
+        if (r.ok) {
+          meBox.textContent = 'Sesión activa';
+          location.replace('/'); // va a servir index.html
+          return;
+        }
+      }catch{}
+      meBox.textContent = 'No autenticado';
+    })();
+
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      err.textContent = '';
+      const payload = {
+        email: email.value.trim(),
+        password: pass.value
+      };
+      if (!payload.email || !payload.password){
+        err.textContent = 'Completá email y contraseña.'; return;
+      }
+      btn.disabled = true;
+      const prev = btn.textContent;
+      btn.innerHTML = '<span class="spinner"></span>Entrando…';
+      try{
+        const r = await fetch('/auth/login', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if (!r.ok){
+          if (r.status === 401) err.textContent = 'Credenciales inválidas.';
+          else err.textContent = 'Error de autenticación.';
+          return;
+        }
+        // OK → vamos a la app
+        location.replace('/');
+      }catch(e){
+        err.textContent = 'Error de red.';
+      }finally{
+        btn.disabled = false;
+        btn.textContent = prev;
+      }
+    });
+  </script>
+</body>
+</html>

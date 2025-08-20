@@ -2,110 +2,77 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <title>Ventas Mercado Libre</title>
+  <title>proyecto-ml</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     :root{
       --bg:#0f1623; --panel:#131c2b; --muted:#8ea3c2; --text:#e7eefc; --accent:#00c2a8; --line:#203049;
-      --red-rgb:220,61,82;
-      --yellow-rgb:190,140,0;
-      --green-rgb:30,132,73;
-      --magenta-rgb:142,36,170;
+      --red-rgb:220,61,82; --yellow-rgb:190,140,0; --green-rgb:30,132,73; --magenta-rgb:142,36,170;
       --gap:14px;
     }
     *{box-sizing:border-box}
     html,body{height:100%}
-    body{ margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell; background:var(--bg); color:var(--text); }
+    body{margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell; background:var(--bg); color:var(--text)}
     .wrap{max-width:1200px; margin:24px auto; padding:0 16px}
 
-    /* ===== Top bar única (pestañas) ===== */
-    .topbar{
-      display:flex; align-items:center; justify-content:space-between;
-      padding:10px var(--gap); background:var(--panel);
-      border-bottom:1px solid var(--line); position:sticky; top:0; z-index:100;
-    }
+    /* ===== Top bar (tabs principales) ===== */
+    .topbar{display:flex; align-items:center; justify-content:space-between; padding:10px var(--gap); background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:100}
     .brand{ font-weight:600; opacity:.9; }
     .tabs{ display:flex; gap:8px; }
-    .tab-btn{
-      background:transparent; border:1px solid var(--line); color:var(--text);
-      padding:6px 10px; border-radius:999px; cursor:pointer; font-weight:700;
-    }
-    .tab-btn.active{ border-color:var(--accent); background:var(--accent); color:#001813; }
+    .tab-btn{ background:transparent; border:1px solid var(--line); color:var(--text); padding:6px 10px; border-radius:999px; cursor:pointer; font-weight:700 }
+    .tab-btn.active{ border-color:var(--accent); background:var(--accent); color:#001813 }
+    .panel[hidden]{display:none}
 
-    /* Mostrar/ocultar paneles de tabs */
-    .panel[hidden]{ display:none; }
-
-    /* ===== Estilos del Dashboard ===== */
+    /* ===== Estilos comunes ===== */
     .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.25)}
+    .muted{color:var(--muted)}
+    button,.btn{cursor:pointer}
+    input,select,button,.btn{height:36px; border-radius:10px; border:1px solid var(--line); background:#0f1a2b; color:#fff; padding:0 10px; outline:none}
+    button,.btn{background:var(--accent); color:#001813; border:none; font-weight:600}
+    button:disabled{opacity:.6; cursor:not-allowed}
+    .right{display:flex; gap:10px; align-items:center}
 
+    /* ===== Subtabs (dentro de Ventas ML) ===== */
+    .subtabs{display:flex; gap:8px; margin-bottom:14px}
+    .sub-btn{ background:transparent; border:1px solid var(--line); color:var(--text); padding:6px 10px; border-radius:10px; cursor:pointer; font-weight:700 }
+    .sub-btn.active{ border-color:var(--accent); background:var(--accent); color:#001813 }
+
+    /* ===== Home ===== */
+    .home-grid{display:grid; grid-template-columns:repeat(2,1fr); gap:16px}
+    .home-card{padding:18px; border-radius:14px; border:1px solid var(--line); background:rgba(255,255,255,.03)}
+    .home-card h3{margin:0 0 8px 0}
+    .home-card p{margin:0 0 12px 0; color:var(--muted)}
+    @media (max-width:800px){ .home-grid{grid-template-columns:1fr} }
+
+    /* ===== Dashboard ===== */
     .hdr{padding:16px 18px; border-bottom:1px solid var(--line); display:flex; align-items:end; justify-content:space-between; gap:12px; flex-wrap:wrap}
     .title{display:flex; align-items:center; gap:10px}
     .title h1{font-size:18px; margin:0; letter-spacing:.2px}
-    .titleLogo{height:24px; width:auto; display:block; background:transparent}
-
+    .titleLogo{height:24px}
     .controls{display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap}
     label{font-size:12px; color:var(--muted)}
-    input,select,button,.btn{
-      height:36px; border-radius:10px; border:1px solid var(--line); background:#0f1a2b; color:#fff;
-      padding:0 10px; outline:none;
-    }
-    input[type="date"]{padding:0 8px}
-    button,.btn{cursor:pointer; background:var(--accent); color:#001813; border:none; font-weight:600}
-    button:disabled{opacity:.6; cursor:not-allowed}
-    .btn.secondary{background:#1b2b46; color:var(--text); border:1px solid var(--line)}
     .meta{font-size:12px; color:var(--muted); min-height:18px; display:flex; align-items:center; gap:8px}
-
-    .spinner{
-      display:inline-block; width:14px; height:14px;
-      border:2px solid rgba(231,238,252,.25);
-      border-top-color: var(--accent);
-      border-radius:50%;
-      animation: spin .8s linear infinite;
-    }
-    @keyframes spin{ to{ transform: rotate(360deg); } }
-
+    .scroller{max-height:58vh; overflow:auto}
     .tbl{width:100%; border-collapse:collapse}
     .tbl th,.tbl td{padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap; font-size:13px}
     .tbl th{position:sticky; top:0; background:var(--panel); z-index:2; text-align:left; font-weight:600; color:#cfe2ff}
-    .tbl td:nth-child(3){max-width:420px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+    .tbl td:nth-child(3){max-width:420px; overflow:hidden; text-overflow:ellipsis}
     .tbl thead tr{box-shadow:0 2px 0 0 var(--line)}
-    .scroller{max-height:58vh; overflow:auto}
-
     .totalsbar{display:flex; gap:12px; padding:12px 18px; border-bottom:1px solid var(--line); align-items:center; flex-wrap:wrap}
     .tbox{display:flex; flex-direction:column; gap:6px}
-    .tbox label{font-size:12px; color:var(--muted)}
-    .tbox input{
-      height:40px; min-width:190px; background:#0f1a2b; color:#fff;
-      border-radius:10px; border:1px solid var(--line); padding:0 12px; font-weight:700; letter-spacing:.2px;
-    }
+    .tbox input{height:40px; min-width:190px; background:#0f1a2b; color:#fff; border-radius:10px; border:1px solid var(--line); padding:0 12px; font-weight:700; letter-spacing:.2px}
     .tbox.small input{min-width:160px}
-
-    .brandRight{ margin-left:auto; display:flex; align-items:center; }
-    .brandRight img{ height:46px; width:auto; display:block; background:transparent; }
-
-    .lvl-red{     background-color: rgba(var(--red-rgb), .55) !important;     border:1px solid rgba(var(--red-rgb), .9) !important;     color:#fff !important; }
-    .lvl-yellow{  background-color: rgba(var(--yellow-rgb), .55) !important;  border:1px solid rgba(var(--yellow-rgb), .9) !important;  color:#0b0b0b !important; }
-    .lvl-green{   background-color: rgba(var(--green-rgb), .55) !important;   border:1px solid rgba(var(--green-rgb), .9) !important;   color:#fff !important; }
-    .lvl-magenta{ background-color: rgba(var(--magenta-rgb), .55) !important; border:1px solid rgba(var(--magenta-rgb), .9) !important; color:#fff !important; }
-
+    .brandRight img{ height:46px; }
+    .spinner{display:inline-block; width:14px; height:14px; border:2px solid rgba(231,238,252,.25); border-top-color: var(--accent); border-radius:50%; animation: spin .8s linear infinite}
+    @keyframes spin{ to{ transform: rotate(360deg); } }
+    .lvl-red{background-color: rgba(var(--red-rgb), .55) !important; border:1px solid rgba(var(--red-rgb), .9) !important; color:#fff !important}
+    .lvl-yellow{background-color: rgba(var(--yellow-rgb), .55) !important; border:1px solid rgba(var(--yellow-rgb), .9) !important; color:#0b0b0b !important}
+    .lvl-green{background-color: rgba(var(--green-rgb), .55) !important; border:1px solid rgba(var(--green-rgb), .9) !important; color:#fff !important}
+    .lvl-magenta{background-color: rgba(var(--magenta-rgb), .55) !important; border:1px solid rgba(var(--magenta-rgb), .9) !important; color:#fff !important}
     .pct-cell{font-weight:700; text-align:right}
-    .right{display:flex; gap:10px; align-items:center}
-    .muted{color:var(--muted)}
 
-    @media (max-width: 680px){
-      .titleLogo{ height:20px; }
-      .brandRight img{ height:36px; }
-    }
-
-    /* ===== Sección Gráficos ===== */
-    .g-controls{
-      display:grid;gap:var(--gap);
-      grid-template-columns: repeat(12, 1fr);
-      align-items:end;margin-bottom:16px;
-      background:rgba(255,255,255,.03);
-      border:1px dashed var(--line);
-      border-radius:14px;padding:14px;
-    }
+    /* ===== Gráficos ===== */
+    .g-controls{display:grid;gap:var(--gap); grid-template-columns:repeat(12,1fr); align-items:end;margin-bottom:16px; background:rgba(255,255,255,.03); border:1px dashed var(--line); border-radius:14px;padding:14px}
     .g-field{display:flex;flex-direction:column;gap:6px}
     .g-inline{display:flex;gap:10px;flex-wrap:wrap;border:1px solid var(--line);border-radius:10px;padding:8px;background:#0f1a2b}
     .g-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin:4px 0 2px;grid-column:1/-1}
@@ -115,18 +82,9 @@
     .g-kpi{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:12px;padding:14px}
     .g-kpi .label{font-size:12px;color:var(--muted);letter-spacing:.3px}
     .g-kpi .value{font-weight:800;font-size:22px;margin-top:6px}
-    .chartBox{
-      height:360px;border:1px dashed rgba(255,255,255,.2);
-      border-radius:12px;display:flex;align-items:center;justify-content:center;color:var(--muted);
-      background:repeating-linear-gradient(45deg, rgba(255,255,255,.02) 0 6px, transparent 6px 12px);
-    }
+    .chartBox{height:360px;border:1px dashed rgba(255,255,255,.2); border-radius:12px;display:flex;align-items:center;justify-content:center;color:var(--muted); background:repeating-linear-gradient(45deg, rgba(255,255,255,.02) 0 6px, transparent 6px 12px)}
     .tableBox{margin-top:14px;border:1px dashed rgba(255,255,255,.2);border-radius:12px;padding:14px;color:var(--muted)}
-
-    .col-3{grid-column: span 3}
-    .col-4{grid-column: span 4}
-    .col-6{grid-column: span 6}
-    .col-12{grid-column: 1 / -1}
-    .hidden{display:none}
+    .col-3{grid-column: span 3} .col-4{grid-column: span 4} .col-6{grid-column: span 6} .col-12{grid-column: 1 / -1} .hidden{display:none}
 
     @media (max-width: 920px){
       .g-kpis{grid-template-columns:repeat(2,1fr)}
@@ -139,192 +97,325 @@
       .g-controls{grid-template-columns:repeat(4,1fr)}
       .col-3,.col-4,.col-6{grid-column: 1 / -1}
     }
+
+    /* ===== Login overlay ===== */
+    .authbox{ display:flex; gap:8px; align-items:center; }
+    .modal{
+      position: fixed; inset:0; display:flex; align-items:center; justify-content:center;
+      background: rgba(0,0,0,.5); z-index: 9999;
+    }
+    .modal .card{
+      width: 360px; padding:16px; background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    }
+    .modal h3{ margin:0 0 10px 0; }
+    .modal .formrow{ display:flex; flex-direction:column; gap:6px; margin:8px 0; }
+    .modal .actions{ display:flex; gap:10px; justify-content:flex-end; margin-top:10px; }
+    .hidden{ display:none !important; }
+/* Fuerza que cualquier [hidden] se oculte */
+[hidden]{ display:none !important; }
+/* Y por si elegimos clase: */
+.modal.hidden{ display:none !important; }
+
   </style>
 </head>
 <body>
 
-  <!-- ===== Barra superior única ===== -->
+  <!-- ===== Topbar ===== -->
   <header class="topbar">
     <div class="brand">proyecto-ml</div>
     <nav class="tabs">
-      <button id="tabBtnVentas" class="tab-btn active">Ventas (index)</button>
-      <button id="tabBtnGraficos" class="tab-btn">Gráficos</button>
+      <button id="tabBtnHome"   class="tab-btn active">Inicio</button>
+      <button id="tabBtnVentas" class="tab-btn">Ventas MercadoLibre</button>
+      <button id="tabBtnEnvios" class="tab-btn">Gestión de envíos</button>
     </nav>
+    <!-- UI de sesión dentro del header -->
+    <div id="authBox" class="authbox">
+      <button id="loginOpenBtn" class="tab-btn">Ingresar</button>
+      <span id="userEmail" class="muted" style="display:none"></span>
+      <button id="logoutBtn" class="tab-btn" style="display:none">Salir</button>
+    </div>
   </header>
 
   <div class="wrap">
-    <!-- ===== PANEL: DASHBOARD (Ventas) ===== -->
-    <section id="panel-dashboard" class="panel" aria-label="Ventas">
-      <div class="card">
-        <div class="hdr">
-          <div class="title">
-            <h1>Ventas Mercado Libre</h1>
-            <img class="titleLogo" src="/img/mercado.png" alt="Mercado Libre" />
-          </div>
-
-          <div class="controls">
-            <div>
-              <label for="from">Desde</label><br/>
-              <input id="from" type="date">
-            </div>
-            <div>
-              <label for="to">Hasta</label><br/>
-              <input id="to" type="date">
-            </div>
-            <button id="loadBtn">Cargar</button>
-            <a id="csvBtn" class="btn secondary" href="#" download>Descargar CSV</a>
-          </div>
-
-          <div class="right">
-            <div class="meta" id="metaBox">
-              <span id="rangeLabel" class="muted">Rango: —</span> · <b id="countLabel">Ventas: 0</b>
-            </div>
-          </div>
+    <!-- ===== PANEL: HOME ===== -->
+    <section id="panel-home" class="panel" aria-label="Inicio">
+      <div class="home-grid">
+        <div class="home-card">
+          <h3>Ventas MercadoLibre</h3>
+          <p>Listados, totales, CSV, comparativos y gráficos.</p>
+          <button id="goVentas">Entrar</button>
         </div>
-
-        <!-- Totales -->
-        <div class="totalsbar">
-          <div class="tbox">
-            <label>Neto total</label>
-            <input id="sumNeto" readonly>
-          </div>
-          <div class="tbox">
-            <label>Costo total</label>
-            <input id="sumCosto" readonly>
-          </div>
-          <div class="tbox">
-            <label>Ganancia (Neto − Costo)</label>
-            <input id="sumGanancia" readonly>
-          </div>
-          <div class="tbox small">
-            <label>Promedio % ganancia</label>
-            <input id="avgPct" readonly>
-          </div>
-
-          <div class="brandRight">
-            <img src="/img/revolucion.png" alt="Revolución Motos" />
-          </div>
-        </div>
-
-        <div class="scroller">
-          <table class="tbl" id="grid">
-            <thead><tr id="thead"></tr></thead>
-            <tbody id="tbody"><tr><td class="muted" colspan="99">Sin datos.</td></tr></tbody>
-          </table>
+        <div class="home-card">
+          <h3>Gestión de envíos</h3>
+          <p>Pedidos listos para imprimir etiqueta (con agregado opcional).</p>
+          <button id="goEnvios">Entrar</button>
         </div>
       </div>
     </section>
 
-    <!-- ===== PANEL: GRÁFICOS ===== -->
-    <section id="panel-graficos" class="panel" aria-label="Gráficos" hidden>
+    <!-- ===== PANEL: VENTAS ML (con subtabs) ===== -->
+    <section id="panel-ventas" class="panel" aria-label="Ventas ML" hidden>
+      <div class="subtabs">
+        <button id="ventasSubBtnDashboard" class="sub-btn active">Ventas</button>
+        <button id="ventasSubBtnGraficos"  class="sub-btn">Gráficos</button>
+      </div>
+
+      <!-- Subpanel: DASHBOARD -->
+      <section id="panel-dashboard" aria-label="Ventas">
+        <div class="card">
+          <div class="hdr">
+            <div class="title">
+              <h1>Ventas Mercado Libre</h1>
+              <img class="titleLogo" src="/img/mercado.png" alt="Mercado Libre" />
+            </div>
+
+            <div class="controls">
+              <div>
+                <label for="from">Desde</label><br/>
+                <input id="from" type="date">
+              </div>
+              <div>
+                <label for="to">Hasta</label><br/>
+                <input id="to" type="date">
+              </div>
+              <button id="loadBtn">Cargar</button>
+              <a id="csvBtn" class="btn" href="#" download>Descargar CSV</a>
+            </div>
+
+            <div class="right">
+              <div class="meta" id="metaBox">
+                <span id="rangeLabel" class="muted">Rango: —</span> · <b id="countLabel">Ventas: 0</b>
+              </div>
+            </div>
+          </div>
+
+          <!-- Totales -->
+          <div class="totalsbar">
+            <div class="tbox">
+              <label>Neto total</label>
+              <input id="sumNeto" readonly>
+            </div>
+            <div class="tbox">
+              <label>Costo total</label>
+              <input id="sumCosto" readonly>
+            </div>
+            <div class="tbox">
+              <label>Ganancia (Neto − Costo)</label>
+              <input id="sumGanancia" readonly>
+            </div>
+            <div class="tbox small">
+              <label>Promedio % ganancia</label>
+              <input id="avgPct" readonly>
+            </div>
+
+            <div class="right">
+              <img src="/img/revolucion.png" alt="Revolución Motos" style="height:46px" />
+            </div>
+          </div>
+
+          <div class="scroller">
+            <table class="tbl" id="grid">
+              <thead><tr id="thead"></tr></thead>
+              <tbody id="tbody"><tr><td class="muted" colspan="99">Sin datos.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Subpanel: GRÁFICOS -->
+      <section id="panel-graficos" aria-label="Gráficos" hidden>
+        <div class="card" style="padding:16px">
+          <h2 style="margin:0 0 10px 0;font-size:16px">Gráficos comparativos</h2>
+
+          <div class="g-controls">
+            <div class="g-field col-3">
+              <label for="gAFrom">Periodo A — Desde</label>
+              <input id="gAFrom" type="date" placeholder="aaaa-mm-dd">
+            </div>
+            <div class="g-field col-3">
+              <label for="gATo">Periodo A — Hasta</label>
+              <input id="gATo" type="date" placeholder="aaaa-mm-dd">
+            </div>
+            <div class="g-field col-3">
+              <label for="gBFrom">Periodo B — Desde</label>
+              <input id="gBFrom" type="date" placeholder="aaaa-mm-dd">
+            </div>
+            <div class="g-field col-3">
+              <label for="gBTo">Periodo B — Hasta</label>
+              <input id="gBTo" type="date" placeholder="aaaa-mm-dd">
+            </div>
+
+            <div class="g-field col-4">
+              <label for="gMetric">Métrica</label>
+              <select id="gMetric">
+                <option value="ventas" selected>Ventas (cantidad)</option>
+                <option value="visitas_item">Visitas (por item)</option>
+              </select>
+            </div>
+
+            <div id="fieldItemId" class="g-field col-6 hidden">
+              <label for="gItemId">Item ID (ej. MLA123…)</label>
+              <input id="gItemId" type="text" placeholder="MLA…">
+            </div>
+
+            <div class="g-field col-4">
+              <label for="gGroupBy">Agrupar por</label>
+              <select id="gGroupBy">
+                <option value="day" selected>Día</option>
+                <option value="week">Semana</option>
+                <option value="month">Mes</option>
+              </select>
+            </div>
+
+            <div class="g-field col-4">
+              <label>Alineación</label>
+              <div class="g-inline" aria-label="Alineación">
+                <label><input id="gAlignReal" type="radio" name="gAlign" value="real" checked> Fecha real</label>
+                <label><input id="gAlignIndexed" type="radio" name="gAlign" value="indexed"> Día 1..N</label>
+              </div>
+            </div>
+
+            <div class="g-field col-4">
+              <label>Estilo</label>
+              <div class="g-inline" aria-label="Estilo">
+                <label><input id="gShowPoints" type="checkbox"> Puntos</label>
+              </div>
+            </div>
+
+            <div class="g-actions">
+              <button id="gBtnTable" class="g-btn" disabled>Ver tabla</button>
+              <button id="gBtnCsv" class="g-btn" disabled>Descargar CSV</button>
+              <button id="gBtnPlot" class="g-btn primary">Ver gráfico</button>
+            </div>
+          </div>
+
+          <div class="g-kpis">
+            <div class="g-kpi"><div class="label">Total A</div><div id="kpiA" class="value">—</div></div>
+            <div class="g-kpi"><div class="label">Total B</div><div id="kpiB" class="value">—</div></div>
+            <div class="g-kpi"><div class="label">Δ Absoluta</div><div id="kpiDeltaAbs" class="value">—</div></div>
+            <div class="g-kpi"><div class="label">Δ %</div><div id="kpiDeltaPct" class="value">—</div></div>
+          </div>
+
+          <div class="chartBox">
+            <canvas id="chartVentas" width="1000" height="360"></canvas>
+          </div>
+          <div id="gTableBox" class="tableBox">Aquí va el desglose en tabla</div>
+        </div>
+      </section>
+    </section>
+
+    <!-- ===== PANEL: ENVÍOS (Impresión de etiquetas) ===== -->
+    <section id="panel-envios" class="panel" aria-label="Gestión de envíos" hidden>
       <div class="card" style="padding:16px">
-        <h2 style="margin:0 0 10px 0;font-size:16px">Gráficos comparativos</h2>
+        <h2 style="margin:0 0 10px 0;font-size:16px">Impresión de etiquetas</h2>
 
-        <div class="g-controls">
-          <div class="g-field col-3">
-            <label for="gAFrom">Periodo A — Desde</label>
-            <input id="gAFrom" type="date" placeholder="aaaa-mm-dd">
-          </div>
-          <div class="g-field col-3">
-            <label for="gATo">Periodo A — Hasta</label>
-            <input id="gATo" type="date" placeholder="aaaa-mm-dd">
-          </div>
-          <div class="g-field col-3">
-            <label for="gBFrom">Periodo B — Desde</label>
-            <input id="gBFrom" type="date" placeholder="aaaa-mm-dd">
-          </div>
-          <div class="g-field col-3">
-            <label for="gBTo">Periodo B — Hasta</label>
-            <input id="gBTo" type="date" placeholder="aaaa-mm-dd">
-          </div>
-
-          <div class="g-field col-4">
-            <label for="gMetric">Métrica</label>
-            <select id="gMetric">
-              <option value="ventas" selected>Ventas (cantidad)</option>
-              <option value="visitas_item">Visitas (por item)</option>
-            </select>
-          </div>
-
-          <div id="fieldItemId" class="g-field col-6 hidden">
-            <label for="gItemId">Item ID (ej. MLA123…)</label>
-            <input id="gItemId" type="text" placeholder="MLA…">
-          </div>
-
-          <div class="g-field col-4">
-            <label for="gGroupBy">Agrupar por</label>
-            <select id="gGroupBy">
-              <option value="day" selected>Día</option>
-              <option value="week">Semana</option>
-              <option value="month">Mes</option>
-            </select>
-          </div>
-
-          <div class="g-field col-4">
-            <label>Alineación</label>
-            <div class="g-inline" aria-label="Alineación">
-              <label><input id="gAlignReal" type="radio" name="gAlign" value="real" checked> Fecha real</label>
-              <label><input id="gAlignIndexed" type="radio" name="gAlign" value="indexed"> Día 1..N</label>
-            </div>
-          </div>
-
-          <div class="g-field col-4">
-            <label>Estilo</label>
-            <div class="g-inline" aria-label="Estilo">
-              <label><input id="gShowPoints" type="checkbox"> Puntos</label>
-            </div>
-          </div>
-
-          <div class="g-actions">
-            <button id="gBtnTable" class="g-btn" disabled>Ver tabla</button>
-            <button id="gBtnCsv" class="g-btn" disabled>Descargar CSV</button>
-            <button id="gBtnPlot" class="g-btn primary">Ver gráfico</button>
-          </div>
+        <div class="toolbar" style="display:flex; gap:12px; align-items:center; margin-bottom:12px">
+          <button id="labels-load">Cargar pedidos</button>
+          <label><input type="checkbox" id="labels-select-all"> Seleccionar todo</label>
+          <button id="labels-print" disabled>Imprimir seleccionados</button>
+          <label style="margin-left:auto"><input type="checkbox" id="labels-add-slip" checked> Añadir agregado (2da página)</label>
         </div>
 
-        <div class="g-kpis">
-          <div class="g-kpi"><div class="label">Total A</div><div id="kpiA" class="value">—</div></div>
-          <div class="g-kpi"><div class="label">Total B</div><div id="kpiB" class="value">—</div></div>
-          <div class="g-kpi"><div class="label">Δ Absoluta</div><div id="kpiDeltaAbs" class="value">—</div></div>
-          <div class="g-kpi"><div class="label">Δ %</div><div id="kpiDeltaPct" class="value">—</div></div>
-        </div>
-
-        <div class="chartBox">
-          <canvas id="chartVentas" width="1000" height="360"></canvas>
-        </div>
-        <div id="gTableBox" class="tableBox">Aquí va el desglose en tabla</div>
+        <div id="labels-table" class="table"></div>
+        <div id="labels-foot" style="margin-top:8px; font-size:12px; opacity:.8">0 seleccionados</div>
       </div>
     </section>
   </div>
 
-  <script>
-    /* ===== Tabs únicas (Ventas / Gráficos) ===== */
-    (function(){
-      const btnVentas = document.getElementById('tabBtnVentas');
-      const btnGraf   = document.getElementById('tabBtnGraficos');
-      const panelDash = document.getElementById('panel-dashboard');
-      const panelGraf = document.getElementById('panel-graficos');
+  <!-- ===== Overlay de Login (fuera del <script>) ===== -->
+  <div id="loginModal" class="modal" hidden>
+    <div class="card">
+      <h3>Ingresar</h3>
+      <div class="formrow">
+        <label for="loginEmail">Email</label>
+        <input id="loginEmail" type="email" placeholder="usuario@tu.com">
+      </div>
+      <div class="formrow">
+        <label for="loginPass">Contraseña</label>
+        <input id="loginPass" type="password" placeholder="••••••••">
+      </div>
+      <div id="loginError" class="muted" style="min-height:18px; color:#ffb4b4"></div>
+      <div class="actions">
+        <button id="loginCancel" class="btn">Cancelar</button>
+        <button id="loginSubmit" class="btn">Entrar</button>
+      </div>
+    </div>
+  </div>
 
-      function setTab(which){
-        const showDash = (which === 'dashboard'); // "Ventas"
-        btnVentas.classList.toggle('active',  showDash);
-        btnGraf.classList.toggle('active',   !showDash);
-        panelDash.hidden = !showDash;
-        panelGraf.hidden =  showDash;
-        try{ localStorage.setItem('ml.tab', which); }catch(e){}
+  <script>
+    /* ===== Navegación principal ===== */
+    (function(){
+      const btnHome   = document.getElementById('tabBtnHome');
+      const btnVentas = document.getElementById('tabBtnVentas');
+      const btnEnvios = document.getElementById('tabBtnEnvios');
+
+      const panelHome   = document.getElementById('panel-home');
+      const panelVentas = document.getElementById('panel-ventas');
+      const panelEnvios = document.getElementById('panel-envios');
+
+      // Entrar desde tarjetas del Home
+      document.getElementById('goVentas')?.addEventListener('click', ()=> setMainTab('ventas'));
+      document.getElementById('goEnvios')?.addEventListener('click', ()=> setMainTab('envios'));
+
+      function setMainTab(which){
+        const showHome   = (which === 'home');
+        const showVentas = (which === 'ventas');
+        const showEnvios = (which === 'envios');
+
+        btnHome.classList.toggle('active', showHome);
+        btnVentas.classList.toggle('active', showVentas);
+        btnEnvios.classList.toggle('active', showEnvios);
+
+        panelHome.hidden   = !showHome;
+        panelVentas.hidden = !showVentas;
+        panelEnvios.hidden = !showEnvios;
+
+        try{ localStorage.setItem('ml.mainTab', which); }catch(e){}
         const url = new URL(location.href);
         url.searchParams.set('tab', which);
         history.replaceState(null,'',url);
       }
 
-      btnVentas.addEventListener('click', ()=> setTab('dashboard'));
-      btnGraf  .addEventListener('click', ()=> setTab('graficos'));
+      btnHome.addEventListener('click',  ()=> setMainTab('home'));
+      btnVentas.addEventListener('click',()=> setMainTab('ventas'));
+      btnEnvios.addEventListener('click',()=> setMainTab('envios'));
 
       const params = new URLSearchParams(location.search);
       const fromQS = params.get('tab');
-      const fromLS = (()=>{ try{ return localStorage.getItem('ml.tab'); }catch(e){ return null; }})();
+      const fromLS = (()=>{ try{ return localStorage.getItem('ml.mainTab'); }catch(e){ return null; }})();
+      const initial = (fromQS === 'ventas' || fromLS === 'ventas') ? 'ventas'
+                     : (fromQS === 'envios' || fromLS === 'envios') ? 'envios'
+                     : 'home';
+      setMainTab(initial);
+    })();
+
+    /* ===== Subtabs de VENTAS (dashboard / gráficos) ===== */
+    (function(){
+      const btnDash = document.getElementById('ventasSubBtnDashboard');
+      const btnGraf = document.getElementById('ventasSubBtnGraficos');
+      const panelDash = document.getElementById('panel-dashboard');
+      const panelGraf = document.getElementById('panel-graficos');
+
+      function setVentasTab(which){
+        const showDash = (which === 'dashboard');
+        btnDash.classList.toggle('active', showDash);
+        btnGraf.classList.toggle('active', !showDash);
+        panelDash.hidden = !showDash;
+        panelGraf.hidden = showDash;
+        try{ localStorage.setItem('ml.ventasTab', which); }catch(e){}
+        const url = new URL(location.href);
+        url.searchParams.set('subtab', which);
+        history.replaceState(null,'',url);
+      }
+
+      btnDash.addEventListener('click', ()=> setVentasTab('dashboard'));
+      btnGraf.addEventListener('click', ()=> setVentasTab('graficos'));
+
+      const params = new URLSearchParams(location.search);
+      const fromQS = params.get('subtab');
+      const fromLS = (()=>{ try{ return localStorage.getItem('ml.ventasTab'); }catch(e){ return null; }})();
       const initial = (fromQS === 'graficos' || fromLS === 'graficos') ? 'graficos' : 'dashboard';
-      setTab(initial);
+      setVentasTab(initial);
     })();
 
     /* ===== Utilidades formato (Dashboard) ===== */
@@ -345,29 +436,13 @@
       if (!Number.isFinite(num)) return '';
       return `${num.toFixed(1)}%`;
     }
-    function classByPct(p){
-      if (!(p > -Infinity)) return '';
-      if (p < 40) return 'lvl-red';
-      if (p < 50) return 'lvl-yellow';
-      if (p < 60) return 'lvl-green';
-      return 'lvl-magenta';
-    }
-    function applyPctClass(el, p){
-      ['lvl-red','lvl-yellow','lvl-green','lvl-magenta'].forEach(c => el.classList.remove(c));
-      const cls = classByPct(p);
-      if (cls) el.classList.add(cls);
-    }
-    function todayYMD(){
-      const d = new Date(); const pad = n=>String(n).padStart(2,'0');
-      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-    }
-    function renderMeta(from, to, count){
-      const metaBox = $('#metaBox');
-      metaBox.innerHTML = `<span id="rangeLabel" class="muted">Rango: ${from} → ${to}</span> · <b id="countLabel">Ventas: ${count}</b>`;
-    }
+    function classByPct(p){ if (!(p > -Infinity)) return ''; if (p < 40) return 'lvl-red'; if (p < 50) return 'lvl-yellow'; if (p < 60) return 'lvl-green'; return 'lvl-magenta'; }
+    function applyPctClass(el, p){ ['lvl-red','lvl-yellow','lvl-green','lvl-magenta'].forEach(c => el.classList.remove(c)); const cls = classByPct(p); if (cls) el.classList.add(cls); }
 
-    // Init Dashboard inputs
-    (function init(){
+    function todayYMD(){ const d = new Date(); const pad = n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+    function renderMeta(from, to, count){ const metaBox = $('#metaBox'); metaBox.innerHTML = `<span id="rangeLabel" class="muted">Rango: ${from} → ${to}</span> · <b id="countLabel">Ventas: ${count}</b>`; }
+
+    (function initDashboardInputs(){
       const ymd = todayYMD();
       $('#from').value = ymd;
       $('#to').value   = ymd;
@@ -377,10 +452,14 @@
 
     const DEFAULT_DATE_BY = 'both';
 
-    // Carga de datos Dashboard
     async function loadData(){
-      const from = $('#from').value;
-      const to = $('#to').value;
+        // 1) leer valores actuales de los inputs
+  let from = $('#from').value?.trim();
+  let to   = $('#to').value?.trim();
+
+  // 2) fallback: si están vacíos, usar hoy y reflejarlo en los inputs
+  if (!from) { from = todayYMD(); $('#from').value = from; }
+  if (!to)   { to   = todayYMD(); $('#to').value   = to; }
       const loadBtn = $('#loadBtn');
       const metaBox = $('#metaBox');
 
@@ -402,19 +481,12 @@
 
         $('#csvBtn').href = `/orders.csv?${qs.toString()}&fmt=excel&locale=latam`;
 
-        // Headers
         const thead = $('#thead'); thead.innerHTML = '';
-        (data.headers || []).forEach(h => {
-          const th = document.createElement('th');
-          th.textContent = h;
-          thead.appendChild(th);
-        });
+        (data.headers || []).forEach(h => { const th = document.createElement('th'); th.textContent = h; thead.appendChild(th); });
 
-        // Rows
         const tbody = $('#tbody'); tbody.innerHTML = '';
         const rows = Array.isArray(data.rows) ? data.rows : [];
 
-        // Columnas con formato
         const moneyCols = [3,4,5,7,9,10,11,12];
         const pctColsGainOnly = [6];
         const pctDiscountCol = 8;
@@ -427,23 +499,10 @@
 
           row.forEach((cell, j) => {
             const td = document.createElement('td');
-
-            if (moneyCols.includes(j)){
-              td.textContent = fmtMoneyARS0(cell);
-              td.style.textAlign = 'right';
-            } else if (pctColsGainOnly.includes(j)){
-              const p = Number(cell);
-              td.textContent = fmtPct1(p);
-              td.classList.add('pct-cell');
-              applyPctClass(td, p);
-            } else if (j === pctDiscountCol){
-              const p = Number(cell);
-              td.textContent = fmtPct1(p);
-              td.style.textAlign = 'right';
-            } else {
-              td.textContent = (cell ?? '');
-            }
-
+            if (moneyCols.includes(j)){ td.textContent = fmtMoneyARS0(cell); td.style.textAlign='right'; }
+            else if (pctColsGainOnly.includes(j)){ const p = Number(cell); td.textContent = fmtPct1(p); td.classList.add('pct-cell'); applyPctClass(td, p); }
+            else if (j === pctDiscountCol){ const p = Number(cell); td.textContent = fmtPct1(p); td.style.textAlign='right'; }
+            else { td.textContent = (cell ?? ''); }
             tr.appendChild(td);
           });
           tbody.appendChild(tr);
@@ -451,9 +510,7 @@
           const neto = Number(row[4]) || 0;
           const costo = Number(row[5]) || 0;
           const pct  = Number(row[6]);
-
-          sumNeto  += neto;
-          sumCosto += costo;
+          sumNeto += neto; sumCosto += costo;
           if (Number.isFinite(pct)) { sumPct += pct; pctCount++; }
         });
 
@@ -470,110 +527,74 @@
       } catch (e){
         alert('Error de red cargando órdenes');
         metaBox.innerHTML = `<span class="muted">Error al cargar</span>`;
-      } finally {
-        loadBtn.disabled = false;
-      }
+      } finally { loadBtn.disabled = false; }
     }
 
-    /* ============================================================
-       ======   GRÁFICOS: Ventas y Visitas (canvas puro)      =====
-       ============================================================ */
-
-    // Helpers gráficos
+    /* ====== Gráficos: helpers y UI ====== */
     const $g = sel => document.querySelector(sel);
     const pad2 = n => String(n).padStart(2,'0');
-    const ymd = d => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+    const ymd2 = d => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
     function addDays(d, n){ const x = new Date(d); x.setDate(x.getDate()+n); return x; }
     function startOfWeek(d){ const x=new Date(d); const wd=(x.getDay()+6)%7; x.setDate(x.getDate()-wd); x.setHours(0,0,0,0); return x; }
     function startOfMonth(d){ const x=new Date(d.getFullYear(), d.getMonth(), 1); x.setHours(0,0,0,0); return x; }
 
-    // Prefill: últimos 30 días vs previos 30
     (function initGraphDefaults(){
       const hoy = new Date(); hoy.setHours(0,0,0,0);
       const aTo   = addDays(hoy, 0);
       const aFrom = addDays(hoy, -29);
       const bTo   = addDays(aFrom, -1);
       const bFrom = addDays(bTo, -29);
-
-      $g('#gAFrom').value = ymd(aFrom);
-      $g('#gATo').value   = ymd(aTo);
-      $g('#gBFrom').value = ymd(bFrom);
-      $g('#gBTo').value   = ymd(bTo);
+      $g('#gAFrom').value = ymd2(aFrom);
+      $g('#gATo').value   = ymd2(aTo);
+      $g('#gBFrom').value = ymd2(bFrom);
+      $g('#gBTo').value   = ymd2(bTo);
     })();
 
-    // UI: mostrar campo Item ID si la métrica es Visitas
     (function bindMetricUI(){
       const metricSel = $g('#gMetric');
       const fieldItem = $g('#fieldItemId');
       const groupSel  = $g('#gGroupBy');
-
       function refresh(){
         const isVisits = (metricSel.value === 'visitas_item');
         fieldItem.classList.toggle('hidden', !isVisits);
-        groupSel.disabled = isVisits;   // visitas: sólo por día
+        groupSel.disabled = isVisits;
         if (isVisits) groupSel.value = 'day';
       }
       metricSel.addEventListener('change', refresh);
       refresh();
     })();
 
-    // Leer órdenes y agrupar por day/week/month → cuenta de ventas
     async function fetchOrdersAgg({from, to, groupBy}) {
       const qs = new URLSearchParams({ from, to, dateBy: 'both' });
-      const resp = await fetch(`/orders?${qs.toString()}`, {
-        headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' }
-      });
+      const resp = await fetch(`/orders?${qs.toString()}`, { headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' }});
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       const rows = Array.isArray(data.rows) ? data.rows : [];
-
-      const DATE_COL = 1; // FECHA
-
-      const map = new Map(); // key -> {label, count}
+      const DATE_COL = 1;
+      const map = new Map();
       for (const row of rows) {
-        const raw = row[DATE_COL];
-        if (!raw) continue;
-        const d = new Date(raw);
-        if (isNaN(d)) continue;
-
+        const raw = row[DATE_COL]; if (!raw) continue;
+        const d = new Date(raw); if (isNaN(d)) continue;
         let key, label;
-        if (groupBy === 'week') {
-          const w = startOfWeek(d);
-          key = `W:${ymd(w)}`; label = `Sem ${ymd(w)}`;
-        } else if (groupBy === 'month') {
-          const m = startOfMonth(d);
-          key = `M:${m.getFullYear()}-${pad2(m.getMonth()+1)}`;
-          label = `${pad2(m.getMonth()+1)}/${m.getFullYear()}`;
-        } else {
-          key = `D:${ymd(d)}`; label = ymd(d);
-        }
-
+        if (groupBy === 'week'){ const w = startOfWeek(d); key = `W:${ymd2(w)}`; label = `Sem ${ymd2(w)}`; }
+        else if (groupBy === 'month'){ const m = startOfMonth(d); key = `M:${m.getFullYear()}-${pad2(m.getMonth()+1)}`; label = `${pad2(m.getMonth()+1)}/${m.getFullYear()}`; }
+        else { key = `D:${ymd2(d)}`; label = ymd2(d); }
         const prev = map.get(key) || { label, count: 0 };
         prev.count += 1; map.set(key, prev);
       }
-
-      const arr = Array.from(map.entries())
-        .sort((a,b)=> a[0] < b[0] ? -1 : 1)
-        .map(([,v])=> v);
-
+      const arr = Array.from(map.entries()).sort((a,b)=> a[0] < b[0] ? -1 : 1).map(([,v])=> v);
       const total = arr.reduce((s,x)=> s + x.count, 0);
       return { series: arr, total };
     }
 
-    // Leer visitas por item (día a día)
     async function fetchVisitsAgg({itemId, from, to}) {
       const qs = new URLSearchParams({ item_id: itemId, from, to });
       const resp = await fetch(`/ml/visits?${qs.toString()}`);
-      if (!resp.ok){
-        const t = await resp.text().catch(()=> '');
-        throw new Error(`ML visits HTTP ${resp.status} ${t}`);
-      }
+      if (!resp.ok){ const t = await resp.text().catch(()=> ''); throw new Error(`ML visits HTTP ${resp.status} ${t}`); }
       const data = await resp.json();
-      // data.series ya viene [{label:"YYYY-MM-DD", count:n}] ordenado
       return { series: Array.isArray(data.series)? data.series : [], total: Number(data.total)||0 };
     }
 
-    // Alineación: "indexed" (1..N con nulls) y "real" (por etiqueta)
     function buildAlignedSeries(A, B, alignMode) {
       if (alignMode === 'indexed') {
         const len = Math.max(A.series.length, B.series.length);
@@ -582,9 +603,7 @@
         const bVals = labels.map((_,i)=> (B.series[i] ? B.series[i].count : null));
         return { labels, aVals, bVals };
       }
-      const labelSet = new Set();
-      A.series.forEach(x=> labelSet.add(x.label));
-      B.series.forEach(x=> labelSet.add(x.label));
+      const labelSet = new Set(); A.series.forEach(x=> labelSet.add(x.label)); B.series.forEach(x=> labelSet.add(x.label));
       const labels = Array.from(labelSet).sort();
       const aMap = new Map(A.series.map(x=> [x.label, x.count]));
       const bMap = new Map(B.series.map(x=> [x.label, x.count]));
@@ -593,7 +612,6 @@
       return { labels, aVals, bVals };
     }
 
-    // KPIs
     function setKpis(totalA, totalB){
       const dAbs = totalA - totalB;
       const dPct = totalB === 0 ? 0 : (dAbs / totalB * 100);
@@ -603,7 +621,6 @@
       $g('#kpiDeltaPct').textContent = (dPct>=0?'+':'') + dPct.toFixed(1) + '%';
     }
 
-    // Tabla
     function renderTable(labels, aVals, bVals, unitLabel){
       const host = $g('#gTableBox');
       const rows = labels.map((l,i)=> {
@@ -624,169 +641,249 @@
         </table>`;
     }
 
-    // Gráfico canvas (líneas suaves A/B con cortes en null + puntos opcionales)
     function drawLineChart(canvas, labels, aVals, bVals, opts={}){
       const showPoints = !!opts.showPoints;
-      const ctx = canvas.getContext('2d');
-      const W = canvas.width, H = canvas.height;
+      const ctx = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
       ctx.clearRect(0,0,W,H);
-
-      const ml=50, mr=20, mt=20, mb=40;
-      const innerW = W-ml-mr, innerH = H-mt-mb;
-
-      // redondeos
-      ctx.lineJoin = 'round';
-      ctx.lineCap  = 'round';
-      ctx.font = '12px system-ui, Segoe UI, Roboto, sans-serif';
-
+      const ml=50, mr=20, mt=20, mb=40, innerW = W-ml-mr, innerH = H-mt-mb;
+      ctx.lineJoin='round'; ctx.lineCap='round'; ctx.font='12px system-ui, Segoe UI, Roboto, sans-serif';
       const nums = arr => arr.filter(v => Number.isFinite(v));
       const allVals = nums(aVals).concat(nums(bVals));
       const maxY = Math.max(1, ...(allVals.length ? allVals : [1]));
       const yTicks = Math.min(6, Math.max(1, Math.floor(maxY)));
       const yStep = Math.max(1, Math.ceil(maxY / yTicks));
-
-      // grilla
-      ctx.strokeStyle = 'rgba(231,238,252,0.25)';
-      ctx.fillStyle   = 'rgba(231,238,252,0.6)';
-      ctx.lineWidth   = 1;
-
+      ctx.strokeStyle='rgba(231,238,252,0.25)'; ctx.fillStyle='rgba(231,238,252,0.6)'; ctx.lineWidth=1;
       for(let y=0; y<=maxY; y+=yStep){
         const py = mt + innerH - (y/maxY)*innerH;
         ctx.beginPath(); ctx.moveTo(ml, py); ctx.lineTo(W-mr, py); ctx.stroke();
-        const t = String(y);
-        ctx.fillText(t, ml-8-ctx.measureText(t).width, py+3);
+        const t = String(y); ctx.fillText(t, ml-8-ctx.measureText(t).width, py+3);
       }
-
-      const denom = Math.max(1, labels.length-1);
-      const stepX = Math.max(1, Math.floor(labels.length / 12));
-      const xAt = i => ml + (i/denom)*innerW;
-      const yAt = v => mt + innerH - (v/maxY)*innerH;
-
-      labels.forEach((lab, i)=>{
-        if (i % stepX !== 0) return;
-        const x = xAt(i);
-        ctx.fillText(lab, x-ctx.measureText(lab).width/2, H-mb+16);
-      });
-
-      // helper: dividir en segmentos sin null
-      function segments(vals){
-        const segs=[]; let seg=[];
-        for (let i=0;i<vals.length;i++){
-          const v=vals[i];
-          if (Number.isFinite(v)) seg.push([xAt(i), yAt(v)]);
-          else if (seg.length){ segs.push(seg); seg=[]; }
-        }
-        if (seg.length) segs.push(seg);
-        return segs;
-      }
-
-      // Catmull-Rom → Bezier (t=1)
-      function drawSmooth(vals, stroke){
-        const segs = segments(vals);
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = 2;
-
-        segs.forEach(points=>{
-          if (points.length === 1){
-            const [x,y] = points[0];
-            ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+0.1,y); ctx.stroke();
-            return;
-          }
-          if (points.length === 2){
-            ctx.beginPath(); ctx.moveTo(points[0][0], points[0][1]);
-            ctx.lineTo(points[1][0], points[1][1]); ctx.stroke();
-            return;
-          }
-          const t = 1.0;
-          ctx.beginPath();
-          ctx.moveTo(points[0][0], points[0][1]);
-          for (let i=0; i<points.length-1; i++){
-            const p0 = points[i-1] || points[i];
-            const p1 = points[i];
-            const p2 = points[i+1];
-            const p3 = points[i+2] || p2;
-
-            const cp1x = p1[0] + (p2[0] - p0[0]) * (t/6);
-            const cp1y = p1[1] + (p2[1] - p0[1]) * (t/6);
-            const cp2x = p2[0] - (p3[0] - p1[0]) * (t/6);
-            const cp2y = p2[1] - (p3[1] - p1[1]) * (t/6);
-
-            ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2[0], p2[1]);
-          }
-          ctx.stroke();
-        });
-      }
-
-      // puntos
-      function drawPoints(vals, fill){
-        ctx.fillStyle = fill;
-        for (let i=0;i<vals.length;i++){
-          const v = vals[i];
-          if (!Number.isFinite(v)) continue;
-          const x = xAt(i), y = yAt(v);
-          ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI*2); ctx.fill();
-        }
-      }
-
-      // A y B
-      drawSmooth(aVals, 'rgba(0,194,168,0.95)');   // A
-      drawSmooth(bVals, 'rgba(142,36,170,0.9)');   // B
-
-      if (showPoints){
-        drawPoints(aVals, 'rgba(0,194,168,1)');
-        drawPoints(bVals, 'rgba(142,36,170,1)');
-      }
-
-      // leyenda
-      const lx = W - mr - 120, ly = mt + 6;
-      ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(lx-8, ly-12, 120, 32);
-      ctx.fillStyle = 'rgba(231,238,252,0.85)';
-      ctx.fillText('A', lx+18, ly); ctx.fillText('B', lx+18, ly+14);
-      ctx.strokeStyle='rgba(0,194,168,0.95)'; ctx.beginPath(); ctx.moveTo(lx, ly-3); ctx.lineTo(lx+12, ly-3); ctx.stroke();
-      ctx.strokeStyle='rgba(142,36,170,0.9)'; ctx.beginPath(); ctx.moveTo(lx, ly+11); ctx.lineTo(lx+12, ly+11); ctx.stroke();
+      const denom = Math.max(1, labels.length-1); const stepX = Math.max(1, Math.floor(labels.length / 12));
+      const xAt = i => ml + (i/denom)*innerW; const yAt = v => mt + innerH - (v/maxY)*innerH;
+      labels.forEach((lab, i)=>{ if (i % stepX) return; const x = xAt(i); ctx.fillText(lab, x-ctx.measureText(lab).width/2, H-mb+16); });
+      function segments(vals){ const segs=[]; let seg=[]; for (let i=0;i<vals.length;i++){ const v=vals[i]; if (Number.isFinite(v)) seg.push([xAt(i), yAt(v)]); else if (seg.length){ segs.push(seg); seg=[]; } } if (seg.length) segs.push(seg); return segs; }
+      function drawSmooth(vals, stroke){ const segs = segments(vals); ctx.strokeStyle=stroke; ctx.lineWidth=2; segs.forEach(points=>{ if (points.length<2){ const [x,y]=points[0]||[]; if (x){ ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+0.1,y); ctx.stroke(); } return; } const t=1.0; ctx.beginPath(); ctx.moveTo(points[0][0], points[0][1]); for (let i=0;i<points.length-1;i++){ const p0=points[i-1]||points[i], p1=points[i], p2=points[i+1], p3=points[i+2]||p2; const cp1x=p1[0]+(p2[0]-p0[0])*(t/6), cp1y=p1[1]+(p2[1]-p0[1])*(t/6), cp2x=p2[0]-(p3[0]-p1[0])*(t/6), cp2y=p2[1]-(p3[1]-p1[1])*(t/6); ctx.bezierCurveTo(cp1x,cp1y,cp2x,cp2y,p2[0],p2[1]); } ctx.stroke(); }); }
+      function drawPoints(vals, fill){ ctx.fillStyle=fill; for (let i=0;i<vals.length;i++){ const v=vals[i]; if (!Number.isFinite(v)) continue; const x=xAt(i), y=yAt(v); ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill(); } }
+      drawSmooth(aVals,'rgba(0,194,168,0.95)'); drawSmooth(bVals,'rgba(142,36,170,0.9)');
+      if (showPoints){ drawPoints(aVals,'rgba(0,194,168,1)'); drawPoints(bVals,'rgba(142,36,170,1)'); }
+      const lx=W-mr-120, ly=mt+6; ctx.fillStyle='rgba(0,0,0,0.25)'; ctx.fillRect(lx-8,ly-12,120,32);
+      ctx.fillStyle='rgba(231,238,252,0.85)'; ctx.fillText('A',lx+18,ly); ctx.fillText('B',lx+18,ly+14);
+      ctx.strokeStyle='rgba(0,194,168,0.95)'; ctx.beginPath(); ctx.moveTo(lx,ly-3); ctx.lineTo(lx+12,ly-3); ctx.stroke();
+      ctx.strokeStyle='rgba(142,36,170,0.9)'; ctx.beginPath(); ctx.moveTo(lx,ly+11); ctx.lineTo(lx+12,ly+11); ctx.stroke();
     }
 
-    // Click: Ver gráfico
     $g('#gBtnPlot').addEventListener('click', async ()=>{
-      const Afrom = $g('#gAFrom').value;
-      const Ato   = $g('#gATo').value;
-      const Bfrom = $g('#gBFrom').value;
-      const Bto   = $g('#gBTo').value;
-      if(!Afrom || !Ato || !Bfrom || !Bto){
-        alert('Completá las fechas de ambos periodos.');
-        return;
-      }
-
-      const metric = $g('#gMetric').value;              // ventas | visitas_item
-      const groupBy = $g('#gGroupBy').value;            // day|week|month (ventas)
-      const align   = $g('#gAlignIndexed').checked ? 'indexed' : 'real';
-      const showPts = $g('#gShowPoints').checked;
-
+      const Afrom = $g('#gAFrom').value, Ato = $g('#gATo').value, Bfrom = $g('#gBFrom').value, Bto = $g('#gBTo').value;
+      if(!Afrom || !Ato || !Bfrom || !Bto){ alert('Completá las fechas de ambos periodos.'); return; }
+      const metric = $g('#gMetric').value, groupBy = $g('#gGroupBy').value, align = $g('#gAlignIndexed').checked ? 'indexed' : 'real', showPts = $g('#gShowPoints').checked;
       try{
         let A, B, unitLabel = 'ventas';
+        if (metric === 'visitas_item'){ const itemId = $g('#gItemId').value.trim(); if (!itemId){ alert('Ingresá el Item ID para “Visitas”.'); return; }
+          A = await fetchVisitsAgg({ itemId, from: Afrom, to: Ato }); B = await fetchVisitsAgg({ itemId, from: Bfrom, to: Bto }); unitLabel = 'visitas';
+        } else { A = await fetchOrdersAgg({ from: Afrom, to: Ato, groupBy }); B = await fetchOrdersAgg({ from: Bfrom, to: Bto, groupBy }); }
+        const { labels, aVals, bVals } = buildAlignedSeries(A, B, align);
+        setKpis(A.total, B.total); renderTable(labels, aVals, bVals, unitLabel);
+        drawLineChart($g('#chartVentas'), labels, aVals, bVals, { showPoints: showPts });
+      } catch(err){ console.error(err); alert('No se pudieron obtener datos para el gráfico.'); }
+    });
 
-        if (metric === 'visitas_item'){
-          const itemId = $g('#gItemId').value.trim();
-          if (!itemId){ alert('Ingresá el Item ID para “Visitas”.'); return; }
-          A = await fetchVisitsAgg({ itemId, from: Afrom, to: Ato });
-          B = await fetchVisitsAgg({ itemId, from: Bfrom, to: Bto });
-          unitLabel = 'visitas';
+    /* ====== Gestión de envíos: UI (demo / lista + selección) ====== */
+    (function(){
+      const el = {
+        tab: document.getElementById('panel-envios'),
+        table: document.getElementById('labels-table'),
+        load: document.getElementById('labels-load'),
+        selectAll: document.getElementById('labels-select-all'),
+        print: document.getElementById('labels-print'),
+        addSlip: document.getElementById('labels-add-slip'),
+        foot: document.getElementById('labels-foot'),
+      };
+      if (!el.tab) return;
+
+      const state = { rows: [], selected: new Set() };
+      const DEMO = [
+        { orderId:'2000012345', packId:'PCK-101', buyer:'Juan Pérez (@JUANP23)', date:'2025-08-18 10:14', items:'Cigüeñal XYZ (1u); Retén 20x40x7 (1u)', shippingId:'SHIP-9001' },
+        { orderId:'2000012346', packId:'PCK-102', buyer:'Ana López (@ANALO)',   date:'2025-08-18 10:22', items:'Escape MX-250 (1u)',                 shippingId:'SHIP-9002' },
+        { orderId:'2000012347', packId:'PCK-103', buyer:'Carlos Gil (@CGIL)',   date:'2025-08-18 10:37', items:'Rulemán 6203 (2u)',                  shippingId:'SHIP-9003' },
+      ];
+
+      function fmtItems(str, max=80){ if (!str) return '—'; return str.length > max ? str.slice(0,max-1) + '…' : str; }
+
+      function renderTable() {
+        const rows = state.rows;
+        if (!rows.length) {
+          el.table.innerHTML = `<div style="opacity:.8">No hay pedidos cargados. Click en <b>Cargar pedidos</b>.</div>`;
+          el.print.disabled = true; el.selectAll.checked = false; el.foot.textContent = `0 seleccionados`; return;
+        }
+        const head = `
+          <div class="tr" style="display:grid; grid-template-columns: 34px 140px 140px 1fr 220px 160px; gap:10px; padding:8px 10px; border-bottom:1px solid var(--line)">
+            <div></div><div><b>Fecha</b></div><div><b>Orden</b></div><div><b>Ítems</b></div><div><b>Comprador</b></div><div><b>Shipping</b></div>
+          </div>`;
+        const body = rows.map(r => {
+          const id = r.orderId, checked = state.selected.has(id) ? 'checked' : '';
+          return `
+            <div class="tr" style="display:grid; grid-template-columns: 34px 140px 140px 1fr 220px 160px; gap:10px; padding:8px 10px; border-bottom:1px solid rgba(255,255,255,.05)">
+              <div><input type="checkbox" data-rowchk="${id}" ${checked}></div>
+              <div>${r.date || '—'}</div>
+              <div>#${r.orderId}${r.packId ? `<div style="opacity:.7; font-size:12px">Pack: ${r.packId}</div>`:''}</div>
+              <div title="${r.items || ''}">${fmtItems(r.items)}</div>
+              <div>${r.buyer || '—'}</div>
+              <div>${r.shippingId || '—'}</div>
+            </div>`;
+        }).join('');
+        el.table.innerHTML = head + body;
+
+        el.table.querySelectorAll('input[type="checkbox"][data-rowchk]').forEach(chk => {
+          chk.addEventListener('change', (e) => {
+            const id = e.target.getAttribute('data-rowchk');
+            if (e.target.checked) state.selected.add(id); else state.selected.delete(id);
+            syncFooter(); syncSelectAll();
+          });
+        });
+        syncFooter(); syncSelectAll();
+      }
+
+      function syncFooter(){ el.foot.textContent = `${state.selected.size} seleccionados`; el.print.disabled = state.selected.size === 0; }
+      function syncSelectAll(){ const total = state.rows.length, sel = state.selected.size; el.selectAll.indeterminate = sel > 0 && sel < total; el.selectAll.checked = sel === total && total > 0; }
+
+      el.load.addEventListener('click', async () => {
+        // Reemplazar por fetch('/ml/labels/pending') cuando esté el endpoint
+        state.rows = DEMO;
+        state.selected.clear();
+        renderTable();
+      });
+
+      el.selectAll.addEventListener('change', () => {
+        if (!state.rows.length) return;
+        if (el.selectAll.checked) state.rows.forEach(r => state.selected.add(r.orderId));
+        else state.selected.clear();
+        renderTable();
+      });
+
+      el.print.addEventListener('click', async () => {
+        const ids = [...state.selected]; const withSlip = el.addSlip.checked;
+        alert(`Imprimir ${ids.length} pedidos.\nAgregado: ${withSlip ? 'Sí' : 'No'}\nIDs: ${ids.join(', ')}`);
+        // Próximo: POST /ml/labels/print -> PDF
+      });
+
+      renderTable();
+    })();
+
+    /* ====== AUTH FRONT (overlay + gating por roles) ====== */
+    (function(){
+      const el = {
+        modal: document.getElementById('loginModal'),
+        email: document.getElementById('loginEmail'),
+        pass:  document.getElementById('loginPass'),
+        err:   document.getElementById('loginError'),
+        open:  document.getElementById('loginOpenBtn'),
+        cancel:document.getElementById('loginCancel'),
+        submit:document.getElementById('loginSubmit'),
+        uemail:document.getElementById('userEmail'),
+        logout:document.getElementById('logoutBtn'),
+        tabHome:  document.getElementById('tabBtnHome'),
+        tabVentas:document.getElementById('tabBtnVentas'),
+        tabEnvios:document.getElementById('tabBtnEnvios'),
+      };
+
+      function showModal(v){ el.modal.hidden = !v; if (v) setTimeout(()=> el.email?.focus(), 50); }
+      function showError(msg){ el.err.textContent = msg || ''; }
+
+      async function getMe(){
+        try{
+          const r = await fetch('/auth/me');
+          if (!r.ok) return null;
+          const { user } = await r.json();
+          return user;
+        }catch{ return null; }
+      }
+      function has(roles, role){ return roles?.includes('ADMIN') || roles?.includes(role); }
+
+      function applyRoles(user){
+        const roles = user?.roles || [];
+        const canVentas = has(roles, 'VENTAS');
+        const canEnvios = has(roles, 'ENVIOS');
+
+        // Mostrar/ocultar botones de tabs principales
+        el.tabVentas.style.display = canVentas ? '' : 'none';
+        el.tabEnvios.style.display = canEnvios ? '' : 'none';
+
+        // Header de sesión
+        if (user){
+          el.uemail.textContent = user.email;
+          el.uemail.style.display = '';
+          el.logout.style.display = '';
+          el.open.style.display = 'none';
         } else {
-          A = await fetchOrdersAgg({ from: Afrom, to: Ato, groupBy });
-          B = await fetchOrdersAgg({ from: Bfrom, to: Bto, groupBy });
+          el.uemail.style.display = 'none';
+          el.logout.style.display = 'none';
+          el.open.style.display = '';
         }
 
-        const { labels, aVals, bVals } = buildAlignedSeries(A, B, align);
-        setKpis(A.total, B.total);
-        renderTable(labels, aVals, bVals, unitLabel);
-
-        const canvas = $g('#chartVentas');
-        drawLineChart(canvas, labels, aVals, bVals, { showPoints: showPts });
-      } catch(err){
-        console.error(err);
-        alert('No se pudieron obtener datos para el gráfico.');
+        // Si la pestaña activa quedó oculta, redirigí a una visible
+        const active = document.querySelector('.tab-btn.active');
+        if (active && active.style.display === 'none'){
+          if (canVentas) el.tabVentas.click();
+          else if (canEnvios) el.tabEnvios.click();
+          else el.tabHome.click();
+        }
       }
-    });
+
+      // Eventos
+      el.open?.addEventListener('click', ()=> { showError(''); showModal(true); });
+      el.cancel?.addEventListener('click', ()=> showModal(false));
+      el.submit?.addEventListener('click', doLogin);
+      el.pass?.addEventListener('keydown', e=>{ if (e.key === 'Enter') doLogin(); });
+
+      async function doLogin(){
+        showError('');
+        const email = (el.email.value||'').trim();
+        const password = el.pass.value || '';
+        if (!email || !password){ showError('Completá email y contraseña.'); return; }
+        el.submit.disabled = true;
+        try{
+          const r = await fetch('/auth/login', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ email, password })
+          });
+          if (!r.ok){
+            await r.text().catch(()=> '');
+            showError('Credenciales inválidas.');
+            return;
+          }
+          const user = await getMe();
+          showModal(false);
+          applyRoles(user);
+        } catch(e){
+          showError('Error de red.');
+        } finally {
+          el.submit.disabled = false;
+        }
+      }
+
+      el.logout?.addEventListener('click', async ()=>{
+        try{ await fetch('/auth/logout', { method:'POST' }); }catch{}
+        // Limpiar UI y volver a Inicio
+        applyRoles(null);
+        document.getElementById('tabBtnHome')?.click();
+        showModal(true); // pedir login nuevamente
+      });
+
+      // Al cargar: chequeo de sesión y gating inicial
+      (async function initAuthUI(){
+        const user = await getMe();
+        applyRoles(user);
+        // Como este index sólo se sirve si hay sesión, normalmente user != null.
+        // Si por alguna razón no hay, mostramos el modal.
+        if (!user){
+          el.tabVentas.style.display = 'none';
+          el.tabEnvios.style.display = 'none';
+          el.tabHome?.click();
+          showModal(true);
+        }
+      })();
+    })();
   </script>
 </body>
 </html>
