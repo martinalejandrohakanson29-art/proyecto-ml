@@ -25,15 +25,24 @@ import { HEADERS } from './src/utils/columns.js';
 import { mapOrderToGridRow } from './src/utils/mapOrder.js';
 
 const app = express();
-app.use(express.json());
-app.use(compression()); // ↓ comprime JSON/CSV y acelera red
+const IN_PROD = process.env.NODE_ENV === 'production';
 
-// ===== Config de sesión (requerido para login)
+// ===== Proxy / compresión / JSON
+app.set('trust proxy', 1);
+app.use(express.json({ limit: '1mb' }));
+app.use(compression()); // acelera JSON/CSV
+
+// ===== Sesión (login)
 app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: 'lax', secure: false, maxAge: 1000 * 60 * 60 * 8 } // 8h
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: IN_PROD,              // true en Render (HTTPS)
+    maxAge: 1000 * 60 * 60 * 8    // 8h
+  }
 }));
 
 // ===== Clientes HTTP con keep-alive
@@ -190,12 +199,17 @@ let _sellerCache  = { token: '', id: null, exp: 0 };
 
 async function getSheetsClient() {
   const keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS || './credentials/service-account.json';
-  const auth = new google.auth.GoogleAuth({
-    keyFile,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly']
-  });
-  const client = await auth.getClient();
-  return google.sheets({ version: 'v4', auth: client });
+  try {
+    const auth = new google.auth.GoogleAuth({
+      keyFile,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly']
+    });
+    const client = await auth.getClient();
+    return google.sheets({ version: 'v4', auth: client });
+  } catch (e) {
+    console.error('[sheets] credenciales no disponibles:', e.message);
+    throw e;
+  }
 }
 async function getTokenFromSheetsCached() {
   const now = Date.now();
@@ -296,7 +310,6 @@ function groupKey(order, shipmentData) {
   return shipmentData?.id || order?.pack_id || order?.shipping?.id || null;
 }
 function applyShippingSplit(items) {
-  // Sin grupo → ver si está libre por umbral
   for (const it of items) {
     const key = groupKey(it.order, it.shipment);
     if (!key) {
@@ -379,11 +392,45 @@ function applyShippingSplit(items) {
 
 // ====== BOOTSTRAP ADMIN (si no existe y hay envs)
 (async () => {
-  const email = process.env.ADMIN_EMAIL;
-  const pass  = process.env.ADMIN_PASSWORD;
-  if (email && pass && !getUserByEmail(email)) {
-    await createUser({ email, password: pass, roles: ['ADMIN'] });
-    console.log(`[auth] Admin inicial creado: ${email}`);
+  try {
+    const email = process.env.ADMIN_EMAIL;
+    const pass  = process.env.ADMIN_PASSWORD;
+    if (email && pass && !getUserByEmail(email)) {
+      await createUser({ email, password: pass, roles: ['ADMIN'] });
+      console.log(`[auth] Admin inicial creado: ${email}`);
+    } else if (email && pass) {
+      console.log('[auth] Admin ya existía, no se recrea.');
+    } else {
+      console.log('[auth] ADMIN_EMAIL/ADMIN_PASSWORD no definidos (ok si usás SEED_USERS).');
+    }
+  } catch (e) {
+    console.error('[auth] bootstrap admin error:', e);
+  }
+})();
+
+// ====== SEED de usuarios adicionales desde variable de entorno (opcional)
+(async () => {
+  const raw = process.env.SEED_USERS;
+  if (!raw) { console.log('[auth] SEED_USERS no definido.'); return; }
+  try {
+    const list = JSON.parse(raw);
+    if (!Array.isArray(list)) throw new Error('SEED_USERS no es un array');
+    let created = 0;
+    for (const u of list) {
+      const email = String(u?.email || '').trim();
+      const password = String(u?.password || '').trim();
+      const roles = Array.isArray(u?.roles) ? u.roles : [];
+      if (!email || !password || roles.length === 0) continue;
+      const exists = getUserByEmail(email);
+      if (!exists) {
+        await createUser({ email, password, roles });
+        console.log(`[auth] Usuario seed creado: ${email} roles=${roles.join(',')}`);
+        created++;
+      }
+    }
+    console.log(`[auth] SEED_USERS procesado. Nuevos: ${created}`);
+  } catch (e) {
+    console.error('[auth] SEED_USERS inválido:', e.message);
   }
 })();
 
@@ -440,7 +487,7 @@ function buildDenseDailySeries(fromYMD, toYMD, sparse = []) {
   for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
     const y = d.getUTCFullYear();
     const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-    const dd= String(d.getUTCDate()).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
     const label = `${y}-${m}-${dd}`;
     out.push({ label, count: map.get(label) ?? 0 });
   }
@@ -555,7 +602,7 @@ app.get('/orders', async (req, res) => {
     const rawMode = String(req.query.dateBy || req.query.mode || DEFAULT_DATE_BY).toLowerCase();
     const dateBy = (rawMode === 'created' || rawMode === 'paid' || rawMode === 'both') ? rawMode : DEFAULT_DATE_BY;
 
-    // Parse del rango (puede no devolver ISO en algunos casos → reconstruimos)
+    // Parse del rango
     const { fromISO, toISO, fromMs, toMs, fromYMD, toYMD } = parseRangeAR(req.query);
     const toIsoFromYMD = (ymd, endOfDay=false) => {
       const time = endOfDay ? '23:59:59.999' : '00:00:00.000';
@@ -564,7 +611,6 @@ app.get('/orders', async (req, res) => {
     const _searchFromISO = fromISO || toIsoFromYMD(req.query.from, false);
     const _searchToISO   = toISO   || toIsoFromYMD(req.query.to,   true);
 
-    // Base ms por si fromMs/toMs no son válidos
     const baseFromMs = Number.isFinite(fromMs) ? fromMs : new Date(_searchFromISO).getTime();
     const baseToMs   = Number.isFinite(toMs)   ? toMs   : new Date(_searchToISO).getTime();
 
@@ -776,6 +822,9 @@ app.get('/debug/orders-raw', async (req, res) => {
     res.status(500).json({ error: err?.message || 'Internal error' });
   }
 });
+
+// ====== Healthcheck simple
+app.get('/health', (_req, res) => res.send('ok'));
 
 // ====== Home protegida: si no hay sesión → login.html
 function serve(file){ return path.resolve('public', file); }
