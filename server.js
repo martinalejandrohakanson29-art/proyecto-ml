@@ -23,14 +23,12 @@ if (!DEBUG_PAYMENTS) {
   };
 }
 
-
 // Mostrar configuración sensible SOLO en modo debug
 if (DEBUG_ORDERS) {
   console.log('[cfg] ENABLE_MP_TAXES =', process.env.ENABLE_MP_TAXES);
   console.log('[cfg] FETCH_PAYMENTS  =', process.env.FETCH_PAYMENTS);
   console.log('[cfg] MP_TOKEN_ENDING =', process.env.MP_ACCESS_TOKEN?.slice(-6));
 }
-
 
 // Store simple de usuarios
 import { verifyPassword, createUser, getUserByEmail } from './data/authStore.js';
@@ -119,7 +117,7 @@ function parseRangeAR(q) {
   };
 }
 
-// ===== Índices de columnas
+// ===== Índices de columnas (internos, con HEADERS originales)
 const IDX = {
   ID_VENTA: HEADERS.indexOf('ID DE VENTA'),
   FECHA: HEADERS.indexOf('FECHA'),
@@ -136,6 +134,39 @@ const IDX = {
   CARGO: HEADERS.indexOf('CARGO X VENTA'),
   CUOTAS: HEADERS.indexOf('CUOTAS'),
 };
+
+// ===== Nuevo: orden de salida de encabezados (lo que ves en JSON/CSV)
+const HEADERS_OUT = [
+  'TITULO',
+  'Precio Final',
+  'NETO',
+  'COSTO',
+  'GANANCIA',
+  'PRECIO BASE',
+  '% DESCUENTO',
+  'ENVIO',
+  'IMPUESTO',
+  'CARGO X VENTA',
+  'CUOTAS',
+  'ID DE VENTA',
+  'FECHA',
+];
+
+// Mapa de índices: de HEADERS_OUT → índice interno de HEADERS
+const DISPLAY_TO_INTERNAL = HEADERS_OUT.map(h => {
+  // manejar variantes "PRECIO FINAL" vs "Precio Final"
+  if (h === 'Precio Final') {
+    const up = HEADERS.indexOf('PRECIO FINAL');
+    const lo = HEADERS.indexOf('Precio Final');
+    return (lo >= 0 ? lo : up);
+  }
+  return HEADERS.indexOf(h);
+});
+
+// Util para reordenar una fila interna al orden de salida
+function reorderRowForOutput(row) {
+  return DISPLAY_TO_INTERNAL.map(i => (i >= 0 ? row[i] : ''));
+}
 
 // ===== Helpers números
 function toNum(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
@@ -156,7 +187,7 @@ function esEnvioFueraDeML(order, shipment) {
   return noEsME2 || selfService || flexPorFuera;
 }
 
-// Fix de NETO si hay "PRECIO FINAL"
+// Fix de NETO si hay "PRECIO FINAL" (usa índices internos)
 function fixRowNETO(row){
   const pfIdxUpper = HEADERS.indexOf('PRECIO FINAL');
   const pfIdxLower = HEADERS.indexOf('Precio Final');
@@ -174,8 +205,7 @@ function fixRowNETO(row){
 
 /**
  * === Fallback: separar IMPUESTO de CARGO mirando payments ===
- * Busca en payments[].fee_details líneas con "iva / impuesto / tax"
- * y usa payments[].taxes_amount si viene. Devuelve { cargoVenta, impuesto, installments }.
+ * Devuelve { cargoVenta, impuesto, installments }.
  */
 function splitFeesAndTaxesFromPayments(payments = []) {
   let feeTotal = 0;
@@ -229,7 +259,7 @@ async function computeTaxesFromMercadoPago(payments = []) {
           totalTaxes += Number(amt) || 0;
         }
       }
-    } catch {} // silencioso; errores se manejan arriba
+    } catch {}
   }
   return Math.round(totalTaxes * 100) / 100;
 }
@@ -459,7 +489,7 @@ function applyShippingSplit(items) {
   }
 }
 
-// ====== BOOTSTRAP ADMIN (si no existe y hay envs)
+// ====== BOOTSTRAP ADMIN
 (async () => {
   try {
     const email = process.env.ADMIN_EMAIL;
@@ -477,7 +507,7 @@ function applyShippingSplit(items) {
   }
 })();
 
-// ====== SEED de usuarios adicionales desde variable de entorno (opcional)
+// ====== SEED usuarios desde env (opcional)
 (async () => {
   const raw = process.env.SEED_USERS;
   if (!raw) { if (DEBUG_ORDERS) console.log('[auth] SEED_USERS no definido.'); return; }
@@ -503,7 +533,7 @@ function applyShippingSplit(items) {
   }
 })();
 
-// ====== HELPERS DE AUTORIZACIÓN (session)
+// ====== HELPERS DE AUTORIZACIÓN
 function requireAuth(req, res, next) {
   if (req.session?.user) return next();
   return res.status(401).json({ error: 'auth_required' });
@@ -519,7 +549,7 @@ function requireRole(roles) {
   };
 }
 
-// ====== ENDPOINTS DE AUTH (robustos)
+// ====== ENDPOINTS DE AUTH
 app.post('/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -528,7 +558,6 @@ app.post('/auth/login', async (req, res) => {
     const user = await verifyPassword(email, password);
     if (!user) return res.status(401).json({ error: 'invalid_credentials' });
 
-    // Evita fijación de sesión
     req.session.regenerate(err => {
       if (err) return res.status(500).json({ error: 'session_regenerate_failed' });
       req.session.user = user;
@@ -546,7 +575,7 @@ app.post('/auth/logout', (req, res) => {
       path: '/',
       httpOnly: true,
       sameSite: 'lax',
-      secure: IN_PROD, // usa true en Render (HTTPS)
+      secure: IN_PROD,
     });
     res.set('Cache-Control', 'no-store');
     res.json({ ok: true });
@@ -565,13 +594,12 @@ app.get('/auth/me', (req, res) => {
   res.json({ user: u });
 });
 
-
 // ====== GUARDAS POR ROL
 app.use(['/orders', '/orders.csv'], requireRole(['VENTAS', 'ADMIN']));
 app.use(['/ml/visits', '/ml/visits-user'], requireRole(['VENTAS', 'ADMIN']));
 app.use('/ml/labels', requireRole(['ENVIOS', 'ADMIN']));
 
-// ====== ML: VISITAS POR ITEM (agrupadas por día)
+// ====== ML: VISITAS POR ITEM
 function diffDaysInclusive(fromYMD, toYMD){
   const a = new Date(fromYMD+'T00:00:00.000Z');
   const b = new Date(toYMD  +'T00:00:00.000Z');
@@ -635,7 +663,7 @@ app.get('/ml/visits', async (req, res) => {
   }
 });
 
-// ====== ML: VISITAS DE LA CUENTA (agrupadas por día)
+// ====== ML: VISITAS DE LA CUENTA
 app.get('/ml/visits-user', async (req, res) => {
   try{
     const from = String(req.query.from || '').trim();
@@ -673,7 +701,7 @@ app.get('/ml/visits-user', async (req, res) => {
   }
 });
 
-// ====== Gestión de envíos (stubs por ahora)
+// ====== Gestión de envíos (stubs)
 app.get('/ml/labels/pending', (req, res) => {
   res.json({ rows: [] });
 });
@@ -771,13 +799,12 @@ app.get('/orders', async (req, res) => {
     // Filtrar canceladas
     const orders = baseOrders.filter(o => o?.status !== 'cancelled');
 
-    // ====== Armar items → fila (depuración opcional) ======
+    // ====== Armar items → fila (interno, con HEADERS originales) ======
     const items = await Promise.all(orders.map(order => limit(async () => {
       const createdMs = Date.parse(order?.date_created);
       let payments = order?.payments || [];
       let paidMs = getPaidMs(order, payments);
 
-      // ——— DEBUG ORDEN (compacto)
       if (DEBUG_ORDERS) {
         try {
           const oid = order?.id || order?.id_str || order?.shipping?.order_id;
@@ -814,17 +841,15 @@ app.get('/orders', async (req, res) => {
       }
       if (taxesFromMp != null) order._taxesFromMP = taxesFromMp;
 
-      // Guardamos paidMs para pivot
       if (Number.isFinite(paidMs)) order.paidMs = paidMs;
 
-      // Row base
+      // Row base (en orden interno HEADERS)
       const row = mapOrderToGridRow(order, payments, shipmentData, costsMap);
 
-      // Fallback: separar IMPUESTO de CARGO mirando fee_details/taxes_amount
+      // Fallback IMPUESTO vs CARGO mirando fee_details/taxes_amount
       const { cargoVenta, impuesto } = splitFeesAndTaxesFromPayments(payments);
       const cargoRow = toNum(row[IDX.CARGO]);
       const impRow   = toNum(row[IDX.IMPUESTO]);
-
       if (impuesto > 0 && impRow <= 0) {
         if (cargoRow >= impuesto) {
           row[IDX.CARGO]    = round2(cargoRow - impuesto);
@@ -834,14 +859,14 @@ app.get('/orders', async (req, res) => {
         }
       }
 
-      // ===== AJUSTE NUEVO: si el envío es por fuera de ML → ENVIO = 0
+      // ===== AJUSTE: si el envío es por fuera de ML → ENVIO = 0
       try {
         if (esEnvioFueraDeML(order, shipmentData)) {
           row[IDX.ENVIO] = 0;
         }
       } catch {}
 
-      // Recalcular NETO y % ganancia
+      // Recalcular NETO y % ganancia (interno)
       fixRowNETO(row);
       const cost = toNum(row[IDX.COSTO]);
       const neto = toNum(row[IDX.NETO]);
@@ -849,28 +874,7 @@ app.get('/orders', async (req, res) => {
         row[IDX.GANANCIA] = round1(((neto - cost) / cost) * 100);
       }
 
-      // ——— DEBUG PAYMENTS (compacto y opcional)
-      if (DEBUG_PAYMENTS) {
-        try {
-          const paySumm = Array.isArray(payments) ? payments.map(p => ({
-            id: p?.id ?? null,
-            status: p?.status ?? null,
-            amount: p?.transaction_amount ?? p?.total_paid_amount ?? null,
-            taxes_amount: p?.taxes_amount ?? null,
-            fee_details_count: Array.isArray(p?.fee_details) ? p.fee_details.length : 0
-          })) : [];
-          console.log('[orders][payments]', JSON.stringify({
-            order_id: order?.id ?? null,
-            paidMs: Number.isFinite(paidMs) ? paidMs : null,
-            taxesFromMp: taxesFromMp ?? null,
-            payments: paySumm
-          }));
-        } catch (e) {
-          console.log('[orders][payments] print_error:', e?.message);
-        }
-      }
-
-      // Elegir pivot y fechaPivot (string legible)
+      // Elegir pivot (created/paid)
       const pivot = (dateBy === 'created') ? 'created' : (dateBy === 'paid') ? 'paid'
         : (Number.isFinite(paidMs) ? 'paid' : 'created');
       const fechaPivot = (Number.isFinite(paidMs) ? new Date(paidMs) : new Date(createdMs))
@@ -879,7 +883,7 @@ app.get('/orders', async (req, res) => {
       return { order, row, payments, shipment: shipmentData, createdMs, paidMs, pivot, fechaPivot };
     })));
 
-    // Reparto del costo de envío dentro del pack/grupo
+    // Reparto del costo de envío dentro del pack/grupo (interno)
     applyShippingSplit(items);
 
     // Filtrar por rango real (created/paid según dateBy)
@@ -890,10 +894,12 @@ app.get('/orders', async (req, res) => {
       return (ms >= baseFromMs && ms <= baseToMs);
     });
 
-    const rows = inRange.map(it => it.row);
+    // Salida: reordenar cada fila al nuevo orden HEADERS_OUT
+    const rowsInternal = inRange.map(it => it.row);
+    const rows = rowsInternal.map(reorderRowForOutput);
 
     res.json({
-      headers: HEADERS,
+      headers: HEADERS_OUT,           // <-- orden nuevo
       from: fromYMD, to: toYMD, dateBy,
       count: rows.length,
       rows
@@ -904,9 +910,7 @@ app.get('/orders', async (req, res) => {
   }
 });
 
-
-
-// ====== /orders.csv (CSV descargable)
+// ====== /orders.csv (CSV descargable) — usa /orders ya reordenado
 function toCsvLine(arr) {
   return arr.map(v => {
     if (v === null || v === undefined) return '';
@@ -929,7 +933,7 @@ app.get('/orders.csv', async (req, res) => {
     const url = req.protocol + '://' + req.get('host') + '/orders?' + (new URLSearchParams(req.query)).toString();
     const r = await (await fetch(url, { headers: { cookie: req.headers.cookie || '' } })).json();
 
-    const headers = Array.isArray(r.headers) ? r.headers : HEADERS;
+    const headers = Array.isArray(r.headers) ? r.headers : HEADERS_OUT; // ya vienen reordenados
     const rows = Array.isArray(r.rows) ? r.rows : [];
 
     const lines = [ toCsvLine(headers) ];
@@ -1020,3 +1024,4 @@ const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => {
   console.log(`ML backend listo en http://localhost:${PORT}`);
 });
+
