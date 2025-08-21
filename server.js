@@ -8,6 +8,30 @@ import https from 'node:https';
 import session from 'express-session';
 import compression from 'compression';
 
+// ===== Config de comportamiento (flags de debug)
+const IN_PROD = process.env.NODE_ENV === 'production';
+const DEBUG_ORDERS = process.env.DEBUG_ORDERS === '1';
+const DEBUG_PAYMENTS = process.env.DEBUG_PAYMENTS === '1';
+// Silenciar logs con prefijo "[tax]" si no está activado DEBUG_PAYMENTS
+if (!DEBUG_PAYMENTS) {
+  const _origLog = console.log;
+  console.log = (...args) => {
+    try {
+      if (typeof args[0] === 'string' && args[0].startsWith('[tax]')) return;
+    } catch {}
+    _origLog(...args);
+  };
+}
+
+
+// Mostrar configuración sensible SOLO en modo debug
+if (DEBUG_ORDERS) {
+  console.log('[cfg] ENABLE_MP_TAXES =', process.env.ENABLE_MP_TAXES);
+  console.log('[cfg] FETCH_PAYMENTS  =', process.env.FETCH_PAYMENTS);
+  console.log('[cfg] MP_TOKEN_ENDING =', process.env.MP_ACCESS_TOKEN?.slice(-6));
+}
+
+
 // Store simple de usuarios
 import { verifyPassword, createUser, getUserByEmail } from './data/authStore.js';
 
@@ -25,7 +49,6 @@ import { HEADERS } from './src/utils/columns.js';
 import { mapOrderToGridRow } from './src/utils/mapOrder.js';
 
 const app = express();
-const IN_PROD = process.env.NODE_ENV === 'production';
 
 // ===== Proxy / compresión / JSON
 app.set('trust proxy', 1);
@@ -64,7 +87,7 @@ const SHIP_RULE_USE_BASE = process.env.SHIP_RULE_USE_BASE !== 'false';
 const SHIP_THRESHOLD_INCLUSIVE = (process.env.SHIP_THRESHOLD_INCLUSIVE ?? 'true') !== 'false';
 const SHIP_SPLIT_MODE = (process.env.SHIP_SPLIT_MODE || 'by_price').toLowerCase();
 
-// ===== Config de comportamiento
+// ===== Config adicional
 const TZ_OFFSET = process.env.TZ_OFFSET || '-03:00';
 const DEFAULT_DATE_BY = (process.env.DEFAULT_DATE_BY || 'both').toLowerCase();
 const PAID_LOOKBACK_DAYS = Number(process.env.PAID_LOOKBACK_DAYS || 5);
@@ -72,7 +95,6 @@ const FETCH_PAYMENTS_DEFAULT = process.env.FETCH_PAYMENTS === 'true';
 const ENABLE_MP_TAXES = process.env.ENABLE_MP_TAXES !== 'false';
 const INCLUDE_SHIPMENT_DEFAULT = process.env.INCLUDE_SHIPMENT_DEFAULT !== 'false';
 const CSV_FMT_DEFAULT = (process.env.CSV_FMT_DEFAULT || 'ars').toLowerCase();
-const DEBUG_ORDERS = process.env.DEBUG_ORDERS === '1';
 
 // ===== Utilidades de fecha (AR -03:00)
 function dateWithOffset(raw, endOfDay) {
@@ -193,7 +215,7 @@ async function computeTaxesFromMercadoPago(payments = []) {
           totalTaxes += Number(amt) || 0;
         }
       }
-    } catch {}
+    } catch {} // silencioso; errores se manejan arriba
   }
   return Math.round(totalTaxes * 100) / 100;
 }
@@ -430,11 +452,11 @@ function applyShippingSplit(items) {
     const pass  = process.env.ADMIN_PASSWORD;
     if (email && pass && !getUserByEmail(email)) {
       await createUser({ email, password: pass, roles: ['ADMIN'] });
-      console.log(`[auth] Admin inicial creado: ${email}`);
+      if (DEBUG_ORDERS) console.log(`[auth] Admin inicial creado: ${email}`);
     } else if (email && pass) {
-      console.log('[auth] Admin ya existía, no se recrea.');
+      if (DEBUG_ORDERS) console.log('[auth] Admin ya existía, no se recrea.');
     } else {
-      console.log('[auth] ADMIN_EMAIL/ADMIN_PASSWORD no definidos (ok si usás SEED_USERS).');
+      if (DEBUG_ORDERS) console.log('[auth] ADMIN_EMAIL/ADMIN_PASSWORD no definidos (ok si usás SEED_USERS).');
     }
   } catch (e) {
     console.error('[auth] bootstrap admin error:', e);
@@ -444,7 +466,7 @@ function applyShippingSplit(items) {
 // ====== SEED de usuarios adicionales desde variable de entorno (opcional)
 (async () => {
   const raw = process.env.SEED_USERS;
-  if (!raw) { console.log('[auth] SEED_USERS no definido.'); return; }
+  if (!raw) { if (DEBUG_ORDERS) console.log('[auth] SEED_USERS no definido.'); return; }
   try {
     const list = JSON.parse(raw);
     if (!Array.isArray(list)) throw new Error('SEED_USERS no es un array');
@@ -457,11 +479,11 @@ function applyShippingSplit(items) {
       const exists = getUserByEmail(email);
       if (!exists) {
         await createUser({ email, password, roles });
-        console.log(`[auth] Usuario seed creado: ${email} roles=${roles.join(',')}`);
+        if (DEBUG_ORDERS) console.log(`[auth] Usuario seed creado: ${email} roles=${roles.join(',')}`);
         created++;
       }
     }
-    console.log(`[auth] SEED_USERS procesado. Nuevos: ${created}`);
+    if (DEBUG_ORDERS) console.log(`[auth] SEED_USERS procesado. Nuevos: ${created}`);
   } catch (e) {
     console.error('[auth] SEED_USERS inválido:', e.message);
   }
@@ -645,7 +667,6 @@ app.post('/ml/labels/print', (req, res) => {
   res.status(501).json({ error: 'not_implemented' });
 });
 
-// ====== /orders (JSON para la grilla)
 app.get('/orders', async (req, res) => {
   try {
     // Fallback de fechas mínimo: si faltan, usar HOY
@@ -664,7 +685,7 @@ app.get('/orders', async (req, res) => {
     const rawMode = String(req.query.dateBy || req.query.mode || DEFAULT_DATE_BY).toLowerCase();
     const dateBy = (rawMode === 'created' || rawMode === 'paid' || rawMode === 'both') ? rawMode : DEFAULT_DATE_BY;
 
-    // Parse del rango
+    // Parse rango
     const { fromISO, toISO, fromMs, toMs, fromYMD, toYMD } = parseRangeAR(req.query);
     const toIsoFromYMD = (ymd, endOfDay=false) => {
       const time = endOfDay ? '23:59:59.999' : '00:00:00.000';
@@ -698,7 +719,6 @@ app.get('/orders', async (req, res) => {
     const idsList = String(req.query.id || req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
 
     let baseOrders = [];
-
     if (idsList.length) {
       baseOrders = await fetchOrdersByIdsOrPacks(idsList, sellerId, token);
     } else {
@@ -737,89 +757,134 @@ app.get('/orders', async (req, res) => {
     // Filtrar canceladas
     const orders = baseOrders.filter(o => o?.status !== 'cancelled');
 
-    // Armar items → fila
+    // ====== Armar items → fila (depuración opcional) ======
     const items = await Promise.all(orders.map(order => limit(async () => {
       const createdMs = Date.parse(order?.date_created);
       let payments = order?.payments || [];
       let paidMs = getPaidMs(order, payments);
 
-      // usar fetchPayments (del query) en la condición
+      // ——— DEBUG ORDEN (compacto)
+if (DEBUG_ORDERS) {
+  try {
+    const oid = order?.id || order?.id_str || order?.shipping?.order_id;
+    console.log('[orders][ord]', JSON.stringify({
+      id: oid,
+      date_created: order?.date_created ?? null,
+      date_closed: order?.date_closed ?? null,
+      payments_len: Array.isArray(order?.payments) ? order.payments.length : 0,
+      shipping_status: order?.shipping?.status ?? null,
+      total_amount: order?.total_amount ?? null
+    }));
+  } catch (e) {
+    console.error('[orders][ord] print_error:', e?.message);
+  }
+}
+
+
+      // Traer pagos si hace falta (sólo si dateBy usa pagos)
       if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
         try { payments = await getOrderPayments(order?.id); } catch {}
         paidMs = getPaidMs(order, payments);
       }
 
+      // Shipment (opcional)
       let shipmentData = null;
       if (includeShipment) {
         const shipId = order?.shipping?.id || order?.packages?.[0]?.shipping?.id;
         if (shipId) { try { shipmentData = await getShipment(shipId); } catch {} }
       }
 
-      // Impuestos vía MP (si hay token) — se usa sólo como refuerzo
-      let taxesFromMp = null;
-      if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
-        try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
-      }
+     // Impuestos desde MP (opcional)
+let taxesFromMp = null;
+if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
+  try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
+}
+if (taxesFromMp != null) order._taxesFromMP = taxesFromMp;
 
-      // Row base (usa tu map original)
-      const row = mapOrderToGridRow(order, payments, shipmentData, costsMap, taxesFromMp);
+// Guardamos paidMs para pivot
+if (Number.isFinite(paidMs)) order.paidMs = paidMs;
 
-      // === Fallback: separar impuestos y ajustar cargo/neto si IMPUESTO está en 0 ===
-      const { cargoVenta, impuesto, installments } = splitFeesAndTaxesFromPayments(payments);
-      const cargoRow = toNum(row[IDX.CARGO]);
-      const impRow   = toNum(row[IDX.IMPUESTO]);
+// Row base
+const row = mapOrderToGridRow(order, payments, shipmentData, costsMap);
 
-      if (impuesto > 0 && impRow <= 0) {
-        // movemos esa parte desde CARGO → IMPUESTO (si cargo alcanza)
-        if (cargoRow >= impuesto) {
-          row[IDX.CARGO]    = round2(cargoRow - impuesto);
-          row[IDX.IMPUESTO] = round2(impuesto);
-        } else {
-          // En casos raros, si CARGO es 0 pero sabemos de impuestos, al menos mostrar IMPUESTO
-          row[IDX.IMPUESTO] = round2(impuesto);
-        }
-      }
+// Fallback: separar IMPUESTO de CARGO mirando fee_details/taxes_amount
+const { cargoVenta, impuesto } = splitFeesAndTaxesFromPayments(payments);
+const cargoRow = toNum(row[IDX.CARGO]);
+const impRow   = toNum(row[IDX.IMPUESTO]);
 
-      // Recalcular NETO y % ganancia con los valores ajustados
-      fixRowNETO(row);
-      const cost = toNum(row[IDX.COSTO]);
-      const neto = toNum(row[IDX.NETO]);
-      if (cost > 0 && neto && IDX.GANANCIA >= 0) {
-        row[IDX.GANANCIA] = round1(((neto - cost) / cost) * 100);
-      }
-
-      const pivot = (dateBy === 'created') ? 'created' : (dateBy === 'paid') ? 'paid'
-        : (Number.isFinite(paidMs) ? 'paid' : 'created');
-      const fechaPivot = (Number.isFinite(paidMs) ? new Date(paidMs) : new Date(createdMs))
-        .toISOString().replace('T',' ').slice(0,19);
-
-      return { order, row, payments, shipment: shipmentData, createdMs, paidMs, pivot, fechaPivot };
-    })));
-
-    // Reparto del costo de envío dentro del pack/grupo
-    applyShippingSplit(items);
-
-    // Filtrar por rango real (created/paid según dateBy)
-    const inRange = items.filter(it => {
-      const ms = (it.pivot === 'paid')
-        ? (Number.isFinite(it.paidMs) ? it.paidMs : it.createdMs)
-        : it.createdMs;
-      return (ms >= baseFromMs && ms <= baseToMs);
-    });
-
-    const rows = inRange.map(it => it.row);
-
-    res.json({
-      headers: HEADERS,
-      from: fromYMD, to: toYMD, dateBy,
-      count: rows.length,
-      rows
-    });
-  } catch (err) {
-    console.error('[orders] error:', err);
-    res.status(500).json({ error: err?.message || 'Internal error' });
+if (impuesto > 0 && impRow <= 0) {
+  if (cargoRow >= impuesto) {
+    row[IDX.CARGO]    = round2(cargoRow - impuesto);
+    row[IDX.IMPUESTO] = round2(impuesto);
+  } else {
+    row[IDX.IMPUESTO] = round2(impuesto);
   }
+}
+
+// Recalcular NETO y % ganancia
+fixRowNETO(row);
+const cost = toNum(row[IDX.COSTO]);
+const neto = toNum(row[IDX.NETO]);
+if (cost > 0 && neto && IDX.GANANCIA >= 0) {
+  row[IDX.GANANCIA] = round1(((neto - cost) / cost) * 100);
+}
+
+// ——— DEBUG PAYMENTS (compacto y opcional)
+if (DEBUG_PAYMENTS) {
+  try {
+    const paySumm = Array.isArray(payments) ? payments.map(p => ({
+      id: p?.id ?? null,
+      status: p?.status ?? null,
+      amount: p?.transaction_amount ?? p?.total_paid_amount ?? null,
+      taxes_amount: p?.taxes_amount ?? null,
+      fee_details_count: Array.isArray(p?.fee_details) ? p.fee_details.length : 0
+    })) : [];
+    console.log('[orders][payments]', JSON.stringify({
+      order_id: order?.id ?? null,
+      paidMs: Number.isFinite(paidMs) ? paidMs : null,
+      taxesFromMp: taxesFromMp ?? null,
+      payments: paySumm
+    }));
+  } catch (e) {
+    console.log('[orders][payments] print_error:', e?.message);
+  }
+}
+
+// Elegir pivot y fechaPivot (string legible)
+const pivot = (dateBy === 'created') ? 'created' : (dateBy === 'paid') ? 'paid'
+  : (Number.isFinite(paidMs) ? 'paid' : 'created');
+const fechaPivot = (Number.isFinite(paidMs) ? new Date(paidMs) : new Date(createdMs))
+  .toISOString().replace('T',' ').slice(0,19);
+
+return { order, row, payments, shipment: shipmentData, createdMs, paidMs, pivot, fechaPivot };
+})));
+
+// Reparto del costo de envío dentro del pack/grupo
+applyShippingSplit(items);
+
+// Filtrar por rango real (created/paid según dateBy)
+const inRange = items.filter(it => {
+  const ms = (it.pivot === 'paid')
+    ? (Number.isFinite(it.paidMs) ? it.paidMs : it.createdMs)
+    : it.createdMs;
+  return (ms >= baseFromMs && ms <= baseToMs);
 });
+
+const rows = inRange.map(it => it.row);
+
+res.json({
+  headers: HEADERS,
+  from: fromYMD, to: toYMD, dateBy,
+  count: rows.length,
+  rows
+});
+} catch (err) {
+  console.error('[orders] error:', err);
+  res.status(500).json({ error: err?.message || 'Internal error' });
+}
+});
+
+
 
 // ====== /orders.csv (CSV descargable)
 function toCsvLine(arr) {

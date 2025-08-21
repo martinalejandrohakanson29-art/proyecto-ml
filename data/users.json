@@ -7,6 +7,14 @@
       "roles": [
         "ADMIN"
       ]
+    },
+    {
+      "id": "mekm0yii",
+      "email": "admin@tuapp.com",
+      "passHash": "$2b$10$U4a5IEuM/7Bl9IURSltfG.16jp702u0sRNwOgE6qCflZ00aa8NpnO",
+      "roles": [
+        "ADMIN"
+      ]
     }
   ]
 }

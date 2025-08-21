@@ -1,16 +1,10 @@
 // src/utils/mapOrder.js
 
-// ==========================
-// Helpers
-// ==========================
 const LOG_NETO = String(process.env.LOG_NETO || '').toLowerCase() === 'true';
 
 const round = (n) => Math.round((Number(n) || 0) * 100) / 100;
-const round1 = (n) => Math.round((Number(n) || 0) * 10) / 10; // 1 decimal para %
-const num = (v) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-};
+const round1 = (n) => Math.round((Number(n) || 0) * 10) / 10;
+const num = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
 
 const formatDateTime = (d) => {
   if (!d) return '';
@@ -26,53 +20,44 @@ const formatDateTime = (d) => {
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
 };
 
-// ==========================
-// Extractores
-// ==========================
+// ===== Extractores =====
 function getTitulo(order) {
   return order?.order_items?.[0]?.item?.title ?? '';
 }
-
 function getPrecioBase(order) {
   return num(order?.order_items?.[0]?.full_unit_price);
 }
-
 function getPrecioFinal(order) {
   // total_amount = total de ítems (sin envío)
   return num(order?.total_amount ?? order?.order_items?.[0]?.unit_price);
 }
-
 function getDescuentoPct(order) {
   const base = getPrecioBase(order);
   const final = getPrecioFinal(order);
   if (!base || base <= 0) return 0;
   return round((1 - final / base) * 100);
 }
-
 function getCargoVenta(order) {
   return num(order?.order_items?.[0]?.sale_fee);
 }
-
 function getEnvio(order, shipment) {
   const s = shipment ?? order?.shipment ?? {};
   return num(s?.shipping_option?.list_cost ?? s?.shipping_option?.cost ?? 0);
 }
-
 function getImpuesto(order) {
+  // Priorizar impuestos recopilados desde MP si el server los setea
   if (order && order._taxesFromMP != null) return num(order._taxesFromMP);
   const approved = (order?.payments || []).find(
     (p) => String(p?.status).toLowerCase() === 'approved'
   );
   return num(approved?.taxes_amount);
 }
-
 function getCuotas(order) {
   const approved = (order?.payments || []).find(
     (p) => String(p?.status).toLowerCase() === 'approved'
   );
   return approved?.installments ?? 0;
 }
-
 function getFechaPivot(order) {
   if (order?.fechaPivot) return order.fechaPivot;
   return (
@@ -82,9 +67,7 @@ function getFechaPivot(order) {
   );
 }
 
-// ==========================
-// Costo desde costsMap (sumado por ítem * cantidad)
-// ==========================
+// ===== Costo desde costsMap (sumado por ítem * cantidad) =====
 function getCostoFromMap(order, costsMap = {}) {
   const items = Array.isArray(order?.order_items) ? order.order_items : [];
   let total = 0;
@@ -108,11 +91,8 @@ function getCostoFromMap(order, costsMap = {}) {
   return round(total);
 }
 
-// ==========================
-// Mapeo a la fila esperada
-// Headers (13):
+// ===== Mapeo a fila =====
 // ["ID DE VENTA","FECHA","TITULO","Precio Final","NETO","COSTO","GANANCIA","PRECIO BASE","% DESCUENTO","ENVIO","IMPUESTO","CARGO X VENTA","CUOTAS"]
-// ==========================
 export function mapOrderToGridRow(order, _paymentsSummary, shipmentData, costsMap) {
   const orderId = order?.id ?? 0;
   const fecha = getFechaPivot(order);
@@ -123,7 +103,7 @@ export function mapOrderToGridRow(order, _paymentsSummary, shipmentData, costsMa
   const precioBase = round(getPrecioBase(order));
   const descuentoPct = round(getDescuentoPct(order));
 
-  // Cargos
+  // Cargos (sumar sale_fee por ítem si está)
   let cargoVenta = 0;
   if (Array.isArray(order?.order_items)) {
     for (const it of order.order_items) cargoVenta += num(it?.sale_fee);
@@ -139,8 +119,7 @@ export function mapOrderToGridRow(order, _paymentsSummary, shipmentData, costsMa
   // NETO = lo que te queda antes del costo
   const neto = round(precioFinal - (envio + impuesto + cargoVenta));
 
-  // NUEVO: GANANCIA en %
-  // (neto - costo) / costo * 100
+  // GANANCIA %
   const gananciaPct = costo > 0 ? round1(((neto - costo) / costo) * 100) : 0;
 
   const cuotas = getCuotas(order);
@@ -157,6 +136,27 @@ export function mapOrderToGridRow(order, _paymentsSummary, shipmentData, costsMa
       precioBase,
       descuentoPct,
     });
+  }
+
+  // Debug seguro (sin variables inexistentes)
+  try {
+    const oid = order?.id || order?.id_str || order?.shipping?.order_id;
+    console.log('[tax] order=', oid,
+      'enableMpTaxes=', process.env.ENABLE_MP_TAXES,
+      'fetchPayments=', process.env.FETCH_PAYMENTS
+    );
+    // Si querés ver un sample del primer pago:
+    if (Array.isArray(order?.payments) && order.payments.length) {
+      const p = order.payments[0];
+      console.log('[tax] first payment sample =', {
+        id: p?.id,
+        status: p?.status,
+        taxes_amount: p?.taxes_amount,
+        fee_details_len: Array.isArray(p?.fee_details) ? p.fee_details.length : 0,
+      });
+    }
+  } catch (e) {
+    console.log('[tax] debug error:', e?.message);
   }
 
   return [
