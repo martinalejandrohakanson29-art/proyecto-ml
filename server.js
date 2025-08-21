@@ -142,6 +142,20 @@ function toNum(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const round1 = (n) => Math.round((Number(n) + Number.EPSILON) * 10) / 10;
 
+// === Helper: detectar envío hecho por fuera de MercadoLibre (no ME2 / self_service / retiro / “flex” sin ME2)
+function esEnvioFueraDeML(order, shipment) {
+  const mode     = order?.shipping?.shipping_mode || shipment?.mode || shipment?.shipping_mode;   // 'me2', 'custom', 'not_specified'
+  const logistic = order?.shipping?.logistic_type || shipment?.logistic_type;                    // 'fulfillment', 'self_service', etc.
+  const tags     = new Set(shipment?.tags || []);
+  const service  = (shipment?.shipping_option?.name || '').toLowerCase();
+
+  const noEsME2      = !!mode && mode !== 'me2';
+  const selfService  = logistic === 'self_service' || tags.has('self_service') || tags.has('local_pick_up');
+  const flexPorFuera = service.includes('flex') && noEsME2;
+
+  return noEsME2 || selfService || flexPorFuera;
+}
+
 // Fix de NETO si hay "PRECIO FINAL"
 function fixRowNETO(row){
   const pfIdxUpper = HEADERS.indexOf('PRECIO FINAL');
@@ -764,22 +778,21 @@ app.get('/orders', async (req, res) => {
       let paidMs = getPaidMs(order, payments);
 
       // ——— DEBUG ORDEN (compacto)
-if (DEBUG_ORDERS) {
-  try {
-    const oid = order?.id || order?.id_str || order?.shipping?.order_id;
-    console.log('[orders][ord]', JSON.stringify({
-      id: oid,
-      date_created: order?.date_created ?? null,
-      date_closed: order?.date_closed ?? null,
-      payments_len: Array.isArray(order?.payments) ? order.payments.length : 0,
-      shipping_status: order?.shipping?.status ?? null,
-      total_amount: order?.total_amount ?? null
-    }));
-  } catch (e) {
-    console.error('[orders][ord] print_error:', e?.message);
-  }
-}
-
+      if (DEBUG_ORDERS) {
+        try {
+          const oid = order?.id || order?.id_str || order?.shipping?.order_id;
+          console.log('[orders][ord]', JSON.stringify({
+            id: oid,
+            date_created: order?.date_created ?? null,
+            date_closed: order?.date_closed ?? null,
+            payments_len: Array.isArray(order?.payments) ? order.payments.length : 0,
+            shipping_status: order?.shipping?.status ?? null,
+            total_amount: order?.total_amount ?? null
+          }));
+        } catch (e) {
+          console.error('[orders][ord] print_error:', e?.message);
+        }
+      }
 
       // Traer pagos si hace falta (sólo si dateBy usa pagos)
       if ((dateBy === 'paid' || dateBy === 'both') && !Number.isFinite(paidMs) && fetchPayments) {
@@ -794,94 +807,101 @@ if (DEBUG_ORDERS) {
         if (shipId) { try { shipmentData = await getShipment(shipId); } catch {} }
       }
 
-     // Impuestos desde MP (opcional)
-let taxesFromMp = null;
-if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
-  try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
-}
-if (taxesFromMp != null) order._taxesFromMP = taxesFromMp;
+      // Impuestos desde MP (opcional)
+      let taxesFromMp = null;
+      if (ENABLE_MP_TAXES || req.query.includeMpTaxes === 'true') {
+        try { taxesFromMp = await computeTaxesFromMercadoPago(payments); } catch {}
+      }
+      if (taxesFromMp != null) order._taxesFromMP = taxesFromMp;
 
-// Guardamos paidMs para pivot
-if (Number.isFinite(paidMs)) order.paidMs = paidMs;
+      // Guardamos paidMs para pivot
+      if (Number.isFinite(paidMs)) order.paidMs = paidMs;
 
-// Row base
-const row = mapOrderToGridRow(order, payments, shipmentData, costsMap);
+      // Row base
+      const row = mapOrderToGridRow(order, payments, shipmentData, costsMap);
 
-// Fallback: separar IMPUESTO de CARGO mirando fee_details/taxes_amount
-const { cargoVenta, impuesto } = splitFeesAndTaxesFromPayments(payments);
-const cargoRow = toNum(row[IDX.CARGO]);
-const impRow   = toNum(row[IDX.IMPUESTO]);
+      // Fallback: separar IMPUESTO de CARGO mirando fee_details/taxes_amount
+      const { cargoVenta, impuesto } = splitFeesAndTaxesFromPayments(payments);
+      const cargoRow = toNum(row[IDX.CARGO]);
+      const impRow   = toNum(row[IDX.IMPUESTO]);
 
-if (impuesto > 0 && impRow <= 0) {
-  if (cargoRow >= impuesto) {
-    row[IDX.CARGO]    = round2(cargoRow - impuesto);
-    row[IDX.IMPUESTO] = round2(impuesto);
-  } else {
-    row[IDX.IMPUESTO] = round2(impuesto);
+      if (impuesto > 0 && impRow <= 0) {
+        if (cargoRow >= impuesto) {
+          row[IDX.CARGO]    = round2(cargoRow - impuesto);
+          row[IDX.IMPUESTO] = round2(impuesto);
+        } else {
+          row[IDX.IMPUESTO] = round2(impuesto);
+        }
+      }
+
+      // ===== AJUSTE NUEVO: si el envío es por fuera de ML → ENVIO = 0
+      try {
+        if (esEnvioFueraDeML(order, shipmentData)) {
+          row[IDX.ENVIO] = 0;
+        }
+      } catch {}
+
+      // Recalcular NETO y % ganancia
+      fixRowNETO(row);
+      const cost = toNum(row[IDX.COSTO]);
+      const neto = toNum(row[IDX.NETO]);
+      if (cost > 0 && neto && IDX.GANANCIA >= 0) {
+        row[IDX.GANANCIA] = round1(((neto - cost) / cost) * 100);
+      }
+
+      // ——— DEBUG PAYMENTS (compacto y opcional)
+      if (DEBUG_PAYMENTS) {
+        try {
+          const paySumm = Array.isArray(payments) ? payments.map(p => ({
+            id: p?.id ?? null,
+            status: p?.status ?? null,
+            amount: p?.transaction_amount ?? p?.total_paid_amount ?? null,
+            taxes_amount: p?.taxes_amount ?? null,
+            fee_details_count: Array.isArray(p?.fee_details) ? p.fee_details.length : 0
+          })) : [];
+          console.log('[orders][payments]', JSON.stringify({
+            order_id: order?.id ?? null,
+            paidMs: Number.isFinite(paidMs) ? paidMs : null,
+            taxesFromMp: taxesFromMp ?? null,
+            payments: paySumm
+          }));
+        } catch (e) {
+          console.log('[orders][payments] print_error:', e?.message);
+        }
+      }
+
+      // Elegir pivot y fechaPivot (string legible)
+      const pivot = (dateBy === 'created') ? 'created' : (dateBy === 'paid') ? 'paid'
+        : (Number.isFinite(paidMs) ? 'paid' : 'created');
+      const fechaPivot = (Number.isFinite(paidMs) ? new Date(paidMs) : new Date(createdMs))
+        .toISOString().replace('T',' ').slice(0,19);
+
+      return { order, row, payments, shipment: shipmentData, createdMs, paidMs, pivot, fechaPivot };
+    })));
+
+    // Reparto del costo de envío dentro del pack/grupo
+    applyShippingSplit(items);
+
+    // Filtrar por rango real (created/paid según dateBy)
+    const inRange = items.filter(it => {
+      const ms = (it.pivot === 'paid')
+        ? (Number.isFinite(it.paidMs) ? it.paidMs : it.createdMs)
+        : it.createdMs;
+      return (ms >= baseFromMs && ms <= baseToMs);
+    });
+
+    const rows = inRange.map(it => it.row);
+
+    res.json({
+      headers: HEADERS,
+      from: fromYMD, to: toYMD, dateBy,
+      count: rows.length,
+      rows
+    });
+  } catch (err) {
+    console.error('[orders] error:', err);
+    res.status(500).json({ error: err?.message || 'Internal error' });
   }
-}
-
-// Recalcular NETO y % ganancia
-fixRowNETO(row);
-const cost = toNum(row[IDX.COSTO]);
-const neto = toNum(row[IDX.NETO]);
-if (cost > 0 && neto && IDX.GANANCIA >= 0) {
-  row[IDX.GANANCIA] = round1(((neto - cost) / cost) * 100);
-}
-
-// ——— DEBUG PAYMENTS (compacto y opcional)
-if (DEBUG_PAYMENTS) {
-  try {
-    const paySumm = Array.isArray(payments) ? payments.map(p => ({
-      id: p?.id ?? null,
-      status: p?.status ?? null,
-      amount: p?.transaction_amount ?? p?.total_paid_amount ?? null,
-      taxes_amount: p?.taxes_amount ?? null,
-      fee_details_count: Array.isArray(p?.fee_details) ? p.fee_details.length : 0
-    })) : [];
-    console.log('[orders][payments]', JSON.stringify({
-      order_id: order?.id ?? null,
-      paidMs: Number.isFinite(paidMs) ? paidMs : null,
-      taxesFromMp: taxesFromMp ?? null,
-      payments: paySumm
-    }));
-  } catch (e) {
-    console.log('[orders][payments] print_error:', e?.message);
-  }
-}
-
-// Elegir pivot y fechaPivot (string legible)
-const pivot = (dateBy === 'created') ? 'created' : (dateBy === 'paid') ? 'paid'
-  : (Number.isFinite(paidMs) ? 'paid' : 'created');
-const fechaPivot = (Number.isFinite(paidMs) ? new Date(paidMs) : new Date(createdMs))
-  .toISOString().replace('T',' ').slice(0,19);
-
-return { order, row, payments, shipment: shipmentData, createdMs, paidMs, pivot, fechaPivot };
-})));
-
-// Reparto del costo de envío dentro del pack/grupo
-applyShippingSplit(items);
-
-// Filtrar por rango real (created/paid según dateBy)
-const inRange = items.filter(it => {
-  const ms = (it.pivot === 'paid')
-    ? (Number.isFinite(it.paidMs) ? it.paidMs : it.createdMs)
-    : it.createdMs;
-  return (ms >= baseFromMs && ms <= baseToMs);
-});
-
-const rows = inRange.map(it => it.row);
-
-res.json({
-  headers: HEADERS,
-  from: fromYMD, to: toYMD, dateBy,
-  count: rows.length,
-  rows
-});
-} catch (err) {
-  console.error('[orders] error:', err);
-  res.status(500).json({ error: err?.message || 'Internal error' });
-}
 });
 
 
