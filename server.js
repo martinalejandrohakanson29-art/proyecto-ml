@@ -23,14 +23,12 @@ if (!DEBUG_PAYMENTS) {
   };
 }
 
-
 // Mostrar configuración sensible SOLO en modo debug
 if (DEBUG_ORDERS) {
   console.log('[cfg] ENABLE_MP_TAXES =', process.env.ENABLE_MP_TAXES);
   console.log('[cfg] FETCH_PAYMENTS  =', process.env.FETCH_PAYMENTS);
   console.log('[cfg] MP_TOKEN_ENDING =', process.env.MP_ACCESS_TOKEN?.slice(-6));
 }
-
 
 // Store simple de usuarios
 import { verifyPassword, createUser, getUserByEmail } from './data/authStore.js';
@@ -119,7 +117,7 @@ function parseRangeAR(q) {
   };
 }
 
-// ===== Índices de columnas
+// ===== Índices de columnas (según HEADERS interno, NO tocar)
 const IDX = {
   ID_VENTA: HEADERS.indexOf('ID DE VENTA'),
   FECHA: HEADERS.indexOf('FECHA'),
@@ -136,6 +134,40 @@ const IDX = {
   CARGO: HEADERS.indexOf('CARGO X VENTA'),
   CUOTAS: HEADERS.indexOf('CUOTAS'),
 };
+
+// ===== ORDEN DE SALIDA para el front (remapeo seguro)
+const DISPLAY_HEADERS = [
+  'TITULO',
+  'Precio Final',
+  'NETO',
+  'COSTO',
+  'GANANCIA',
+  'PRECIO BASE',
+  '% DESCUENTO',
+  'ENVIO',
+  'IMPUESTO',
+  'CARGO X VENTA',
+  'CUOTAS',
+  'ID DE VENTA',
+  'FECHA',
+];
+// Mapeo de índices desde HEADERS → DISPLAY_HEADERS (soporta fallback a 'PRECIO FINAL')
+function buildOutputOrder() {
+  return DISPLAY_HEADERS.map((name) => {
+    if (name === 'Precio Final') {
+      const lo = HEADERS.indexOf('Precio Final');
+      if (lo >= 0) return lo;
+      const up = HEADERS.indexOf('PRECIO FINAL');
+      if (up >= 0) return up;
+      return -1;
+    }
+    return HEADERS.indexOf(name);
+  });
+}
+const OUTPUT_IDX = buildOutputOrder();
+function remapRowToDisplay(row) {
+  return OUTPUT_IDX.map(i => i >= 0 ? row[i] : '');
+}
 
 // ===== Helpers números
 function toNum(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
@@ -156,7 +188,7 @@ function esEnvioFueraDeML(order, shipment) {
   return noEsME2 || selfService || flexPorFuera;
 }
 
-// Fix de NETO si hay "PRECIO FINAL"
+// Fix de NETO si hay "PRECIO FINAL" o "Precio Final"
 function fixRowNETO(row){
   const pfIdxUpper = HEADERS.indexOf('PRECIO FINAL');
   const pfIdxLower = HEADERS.indexOf('Precio Final');
@@ -565,7 +597,6 @@ app.get('/auth/me', (req, res) => {
   res.json({ user: u });
 });
 
-
 // ====== GUARDAS POR ROL
 app.use(['/orders', '/orders.csv'], requireRole(['VENTAS', 'ADMIN']));
 app.use(['/ml/visits', '/ml/visits-user'], requireRole(['VENTAS', 'ADMIN']));
@@ -817,7 +848,7 @@ app.get('/orders', async (req, res) => {
       // Guardamos paidMs para pivot
       if (Number.isFinite(paidMs)) order.paidMs = paidMs;
 
-      // Row base
+      // Row base (en orden HEADERS)
       const row = mapOrderToGridRow(order, payments, shipmentData, costsMap);
 
       // Fallback: separar IMPUESTO de CARGO mirando fee_details/taxes_amount
@@ -841,7 +872,7 @@ app.get('/orders', async (req, res) => {
         }
       } catch {}
 
-      // Recalcular NETO y % ganancia
+      // Recalcular NETO y % ganancia sobre el orden HEADERS interno
       fixRowNETO(row);
       const cost = toNum(row[IDX.COSTO]);
       const neto = toNum(row[IDX.NETO]);
@@ -879,7 +910,7 @@ app.get('/orders', async (req, res) => {
       return { order, row, payments, shipment: shipmentData, createdMs, paidMs, pivot, fechaPivot };
     })));
 
-    // Reparto del costo de envío dentro del pack/grupo
+    // Reparto del costo de envío dentro del pack/grupo (orden HEADERS)
     applyShippingSplit(items);
 
     // Filtrar por rango real (created/paid según dateBy)
@@ -890,21 +921,22 @@ app.get('/orders', async (req, res) => {
       return (ms >= baseFromMs && ms <= baseToMs);
     });
 
-    const rows = inRange.map(it => it.row);
+    // Filas en orden HEADERS interno
+    const rowsHead = inRange.map(it => it.row);
+    // Remap a orden de salida pedido
+    const rowsOut = rowsHead.map(remapRowToDisplay);
 
     res.json({
-      headers: HEADERS,
+      headers: DISPLAY_HEADERS,
       from: fromYMD, to: toYMD, dateBy,
-      count: rows.length,
-      rows
+      count: rowsOut.length,
+      rows: rowsOut
     });
   } catch (err) {
     console.error('[orders] error:', err);
     res.status(500).json({ error: err?.message || 'Internal error' });
   }
 });
-
-
 
 // ====== /orders.csv (CSV descargable)
 function toCsvLine(arr) {
@@ -929,7 +961,7 @@ app.get('/orders.csv', async (req, res) => {
     const url = req.protocol + '://' + req.get('host') + '/orders?' + (new URLSearchParams(req.query)).toString();
     const r = await (await fetch(url, { headers: { cookie: req.headers.cookie || '' } })).json();
 
-    const headers = Array.isArray(r.headers) ? r.headers : HEADERS;
+    const headers = Array.isArray(r.headers) ? r.headers : DISPLAY_HEADERS;
     const rows = Array.isArray(r.rows) ? r.rows : [];
 
     const lines = [ toCsvLine(headers) ];
@@ -1020,3 +1052,4 @@ const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => {
   console.log(`ML backend listo en http://localhost:${PORT}`);
 });
+
