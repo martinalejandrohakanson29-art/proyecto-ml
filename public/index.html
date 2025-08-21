@@ -437,6 +437,26 @@
     function todayYMD(){ const d = new Date(); const pad = n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
     function renderMeta(from, to, count){ const metaBox = $('#metaBox'); metaBox.innerHTML = `<span id="rangeLabel" class="muted">Rango: ${from} → ${to}</span> · <b id="countLabel">Ventas: ${count}</b>`; }
 
+    /* === NUEVO: mapeo dinámico por headers === */
+    function idxFromHeaders(H){
+      const find = (k)=> H.indexOf(k);
+      return {
+        TITULO: find('TITULO'),
+        PRECIO_FINAL: find('Precio Final'),
+        NETO: find('NETO'),
+        COSTO: find('COSTO'),
+        GANANCIA_PCT: find('GANANCIA'),
+        PRECIO_BASE: find('PRECIO BASE'),
+        DESCUENTO_PCT: find('% DESCUENTO'),
+        ENVIO: find('ENVIO'),
+        IMPUESTO: find('IMPUESTO'),
+        CARGO: find('CARGO X VENTA'),
+        CUOTAS: find('CUOTAS'),
+        ID: find('ID DE VENTA'),
+        FECHA: find('FECHA'),
+      };
+    }
+
     (function initDashboardInputs(){
       const ymd = todayYMD();
       $('#from').value = ymd;
@@ -466,7 +486,7 @@
       try{
         const resp = await fetch(url, {
           headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' },
-          credentials: 'include' // ← manda cookie de sesión
+          credentials: 'include'
         });
         if (!resp.ok){
           const t = await resp.text().catch(()=> '');
@@ -483,30 +503,42 @@
 
         const tbody = $('#tbody'); tbody.innerHTML = '';
         const rows = Array.isArray(data.rows) ? data.rows : [];
+        const H = data.headers || [];
+        const I = idxFromHeaders(H);
 
-        const moneyCols = [3,4,5,7,9,10,11,12];
-        const pctColsGainOnly = [6];
-        const pctDiscountCol = 8;
+        // Conjuntos por tipo de dato
+        const moneyIdx = new Set([I.PRECIO_FINAL, I.NETO, I.COSTO, I.PRECIO_BASE, I.ENVIO, I.IMPUESTO, I.CARGO]);
+        const pctIdx   = new Set([I.GANANCIA_PCT, I.DESCUENTO_PCT]);
 
         let sumNeto = 0, sumCosto = 0, sumPct = 0, pctCount = 0;
 
         rows.forEach((row, idx) => {
           const tr = document.createElement('tr');
-          tr.dataset.key = `${row[0] ?? ''}|${row[3] ?? ''}|${idx}`;
+          tr.dataset.key = `${row[I.TITULO] ?? ''}|${row[I.PRECIO_FINAL] ?? ''}|${idx}`;
 
           row.forEach((cell, j) => {
             const td = document.createElement('td');
-            if (moneyCols.includes(j)){ td.textContent = fmtMoneyARS0(cell); td.style.textAlign='right'; }
-            else if (pctColsGainOnly.includes(j)){ const p = Number(cell); td.textContent = fmtPct1(p); td.classList.add('pct-cell'); applyPctClass(td, p); }
-            else if (j === pctDiscountCol){ const p = Number(cell); td.textContent = fmtPct1(p); td.style.textAlign='right'; }
-            else { td.textContent = (cell ?? ''); }
+            if (j === I.ID){
+              td.textContent = String(cell ?? '');
+              td.style.fontFamily = 'ui-monospace, monospace';
+            } else if (moneyIdx.has(j)){
+              td.textContent = fmtMoneyARS0(cell);
+              td.style.textAlign = 'right';
+            } else if (pctIdx.has(j)){
+              const p = Number(cell);
+              td.textContent = fmtPct1(p);
+              td.style.textAlign = 'right';
+              if (j === I.GANANCIA_PCT){ td.classList.add('pct-cell'); applyPctClass(td, p); }
+            } else {
+              td.textContent = (cell ?? '');
+            }
             tr.appendChild(td);
           });
           tbody.appendChild(tr);
 
-          const neto = Number(row[4]) || 0;
-          const costo = Number(row[5]) || 0;
-          const pct  = Number(row[6]);
+          const neto = Number(row[I.NETO]) || 0;
+          const costo = Number(row[I.COSTO]) || 0;
+          const pct  = Number(row[I.GANANCIA_PCT]);
           sumNeto += neto; sumCosto += costo;
           if (Number.isFinite(pct)) { sumPct += pct; pctCount++; }
         });
@@ -565,15 +597,16 @@
       const qs = new URLSearchParams({ from, to, dateBy: 'both', fetchPayments: 'true' });
       const resp = await fetch(`/orders?${qs.toString()}`, {
         headers: { 'x-admin-key': localStorage.getItem('ADMIN_KEY') || '' },
-        credentials: 'include' // ← cookie
+        credentials: 'include'
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       const rows = Array.isArray(data.rows) ? data.rows : [];
-      const DATE_COL = 1;
+      const I = idxFromHeaders(data.headers || []);
       const map = new Map();
+
       for (const row of rows) {
-        const raw = row[DATE_COL]; if (!raw) continue;
+        const raw = row[I.FECHA]; if (!raw) continue;
         const d = new Date(raw); if (isNaN(d)) continue;
         let key, label;
         if (groupBy === 'week'){ const w = startOfWeek(d); key = `W:${ymd2(w)}`; label = `Sem ${ymd2(w)}`; }
@@ -776,7 +809,6 @@
         const ids = [...state.selected]; const withSlip = el.addSlip.checked;
         alert(`Imprimir ${ids.length} pedidos.\nAgregado: ${withSlip ? 'Sí' : 'No'}\nIDs: ${ids.join(', ')}`);
         // Próximo: POST /ml/labels/print -> PDF
-        // fetch('/ml/labels/print', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ ids, withSlip }), credentials:'include' })
       });
 
       renderTable();
@@ -895,3 +927,4 @@
   </script>
 </body>
 </html>
+
