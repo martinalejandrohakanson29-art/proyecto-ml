@@ -57,3 +57,6 @@ tmp/
 # data/*.sqlite
 # data/*.local.json
 
+# === Secrets ===
+.env
+credentials/

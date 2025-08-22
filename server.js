@@ -7,6 +7,10 @@ import axios from 'axios';
 import https from 'node:https';
 import session from 'express-session';
 import compression from 'compression';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+
+
+
 
 // ===== Config de comportamiento (flags de debug)
 const IN_PROD = process.env.NODE_ENV === 'production';
@@ -261,7 +265,7 @@ async function computeTaxesFromMercadoPago(payments = []) {
           totalTaxes += Number(amt) || 0;
         }
       }
-    } catch {} // silencioso; errores se manejan arriba
+    } catch {} // silencioso
   }
   return Math.round(totalTaxes * 100) / 100;
 }
@@ -356,6 +360,210 @@ async function getCachedSellerId(token) {
   _sellerCache = { token, id, exp: now + 5 * 60 * 1000 };
   return id;
 }
+
+// === DEBUG: ver agregados desde Google Sheets por orderId ===
+// Requiere header x-admin-key con tu ADMIN_KEY
+app.get('/debug/agregados', requireAdminKey, async (req, res) => {
+  try {
+    const orderId = String(req.query.order || '').trim();
+    const sheetName = process.env.GS_AGREGADOS_SHEET || 'Comparador';
+    const map = await getAgregadoMapFromSheetsCached();
+    const text = orderId ? map[orderId] : undefined;
+    res.json({
+      ok: true,
+      sheetName,
+      orderId,
+      found: !!text,
+      text: text || null,
+      keysCount: Object.keys(map).length,
+      sampleKeys: Object.keys(map).slice(0, 10)
+    });
+  } catch (e) {
+    res.status(500).json({ ok:false, error: String(e?.message || e) });
+  }
+});
+
+// === Lee el mapa de agregados desde Google Sheets (ya debes tener algo similar).
+//   - Claves: columna A (en tu caso, MLA… ó ID de venta)
+//   - Texto:  columnas C, E, G, I concatenadas
+let _addonsCache = { map: null, exp: 0 };
+async function getAddonsMapFromSheetsCached() {
+  const now = Date.now();
+  if (_addonsCache.map && now < _addonsCache.exp) return _addonsCache.map;
+
+  const sheets = await getSheetsClient();
+  const spreadsheetId = process.env.GS_SHEET_ID || '1AUw7IrTmuODu_WrogVienkxfUzG12j5DfH4jbMFvas0';
+  const sheetName = 'Comparador'; // <- como nos dijiste
+  // A: clave (MLA… o ID venta) ; C,E,G,I: agregados
+  const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${sheetName}!A2:J` });
+  const rows = resp.data.values || [];
+
+  const map = {};
+  for (const r of rows) {
+    const key = (r[0] || '').toString().trim();  // Col A
+    if (!key) continue;
+    const a1 = (r[2] || '').toString().trim();   // Col C
+    const a2 = (r[4] || '').toString().trim();   // Col E
+    const a3 = (r[6] || '').toString().trim();   // Col G
+    const a4 = (r[8] || '').toString().trim();   // Col I
+    const parts = [a1, a2, a3, a4].filter(Boolean);
+    map[key] = parts.length ? parts.join(', ') : '';
+  }
+  _addonsCache = { map, exp: now + 5 * 60 * 1000 };
+  return map;
+}
+
+// === Trae los ítems de un shipment (para conocer item_id y order_id)
+//     Importante: usar x-format-new: true
+async function getShipmentItemsList(shipmentId, token) {
+  const { data } = await axios.get(
+    `https://api.mercadolibre.com/shipments/${encodeURIComponent(shipmentId)}/items`,
+    { headers: { Authorization: `Bearer ${token}`, 'x-format-new': 'true' }, timeout: 15000 }
+  );
+  // Normalizamos: esperamos [{ item_id, order_id, quantity, ... }]
+  return Array.isArray(data) ? data : [];
+}
+
+// === Construye el texto de agregados para un shipment mirando:
+//     1) Cada item_id (MLA…)
+//     2) (fallback) Algún order_id del shipment
+async function buildAddonsTextForShipment(shipmentId, token) {
+  const items = await getShipmentItemsList(shipmentId, token);
+  const addonsMap = await getAddonsMapFromSheetsCached();
+
+  const texts = [];
+  const seen = new Set();
+
+  // 1) Por item_id (tu caso: claves MLA de la planilla)
+  for (const it of items) {
+    const k = (it?.item_id || '').toString().trim();
+    if (!k) continue;
+    const t = addonsMap[k];
+    if (t && !seen.has(t)) { texts.push(t); seen.add(t); }
+  }
+
+  // 2) Fallback: por order_id (por si en algún caso usás ID de venta como clave)
+  for (const it of items) {
+    const k = (it?.order_id || '').toString().trim();
+    if (!k) continue;
+    const t = addonsMap[k];
+    if (t && !seen.has(t)) { texts.push(t); seen.add(t); }
+  }
+
+  return texts.join(' • ');
+}
+
+
+// === Dibuja los agregados en cada página de la etiqueta (fuera del recuadro)
+async function overlayAddonsOnPdf(pdfBytes, text) {
+  if (!text) return pdfBytes; // nada que añadir
+
+  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const pages = pdfDoc.getPages();
+
+  // Ajustes simples: margen y tamaño de texto
+  const margin = 20;
+  const fontSize = 10;
+
+  for (const page of pages) {
+    const { width, height } = page.getSize();
+    // Escribimos el texto abajo, centrado, "fuera" del contenido principal
+    page.drawText(text, {
+      x: margin,
+      y: margin,
+      size: fontSize,
+      font,
+      color: rgb(0, 0, 0), // negro
+      maxWidth: width - margin * 2,
+      lineHeight: 12
+    });
+  }
+
+  return await pdfDoc.save();
+}
+
+
+
+
+
+// ====== Cache de "Agregados" desde Google Sheets (usa hoja Comparador: A = ID venta, C/E/G/I = agregados)
+let _agregadosCache = { map: {}, exp: 0 };
+
+async function getAgregadoMapFromSheetsCached() {
+  const now = Date.now();
+  if (_agregadosCache.map && now < _agregadosCache.exp) return _agregadosCache.map;
+
+  const sheets = await getSheetsClient();
+  const spreadsheetId = process.env.GS_SHEET_ID || '1AUw7IrTmuODu_WrogVienkxfUzG12j5DfH4jbMFvas0';
+  const sheetName = process.env.GS_AGREGADOS_SHEET || 'Comparador';
+
+  // Traemos columnas A..I (A, C, E, G, I). Ajustá el rango si tenés más columnas.
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${sheetName}!A2:I`,
+  });
+
+  const rows = resp.data.values || [];
+  const map = {};
+
+  for (const r of rows) {
+    // r[0]=A (ID venta con el que relacionamos la etiqueta)
+    // r[2]=C, r[4]=E, r[6]=G, r[8]=I  → agregados
+    const orderId = String(r?.[0] || '').trim();
+    if (!orderId) continue;
+
+    const parts = [r?.[2], r?.[4], r?.[6], r?.[8]]
+      .map(v => String(v || '').trim())
+      .filter(Boolean);
+
+    if (!parts.length) continue;
+
+    // Podés cambiar el join por '\n' si preferís cada agregado en renglón separado
+    const texto = parts.join(' • ');
+    map[orderId] = texto;
+  }
+
+  _agregadosCache = { map, exp: now + 5 * 60 * 1000 }; // 5 minutos
+  return map;
+}
+
+
+async function buildAgregadoSinglePage({ orderId, text }) {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([595, 842]); // A4
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+
+  page.drawText('AGREGADO', { x: 50, y: 800, size: 18, font });
+  page.drawText(`Venta: ${orderId}`, { x: 50, y: 776, size: 12, font });
+
+  const maxWidth = 495, lineHeight = 16;
+  let y = 748;
+  const wrap = (str) => {
+    const words = (str || '').split(/\s+/);
+    const lines = [];
+    let line = '';
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w;
+      const width = font.widthOfTextAtSize(test, 12);
+      if (width > maxWidth) {
+        if (line) lines.push(line);
+        line = w;
+      } else line = test;
+    }
+    if (line) lines.push(line);
+    return lines;
+  };
+  const lines = wrap(text || '—');
+  for (const ln of lines) {
+    if (y < 60) break;
+    page.drawText(ln, { x: 50, y, size: 12, font });
+    y -= lineHeight;
+  }
+
+  return await pdf.save();
+}
+
 
 // ===== Búsqueda por ID o Pack (paralelizada)
 async function fetchOrdersByIdsOrPacks(ids = [], sellerId, token) {
@@ -704,14 +912,187 @@ app.get('/ml/visits-user', async (req, res) => {
   }
 });
 
-// ====== Gestión de envíos (stubs por ahora)
-app.get('/ml/labels/pending', (req, res) => {
-  res.json({ rows: [] });
-});
-app.post('/ml/labels/print', (req, res) => {
-  res.status(501).json({ error: 'not_implemented' });
+// ====== Gestión de envíos (listar pendientes): Orders -> Shipments (x-format-new)
+app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) => {
+  try {
+    const token = await getTokenFromSheetsCached();
+    const sellerId = await getCachedSellerId(token);
+
+    const auth    = { headers: { Authorization: `Bearer ${token}` } };
+    const authNew = { headers: { Authorization: `Bearer ${token}`, 'x-format-new': 'true' } };
+
+    async function getShipmentNew(shippingId){
+      const { data } = await meliAxios.get(`/shipments/${shippingId}`, authNew);
+      return data;
+    }
+    async function getPackShipments(packId){
+      try {
+        const { data } = await meliAxios.get(`/packs/${packId}/shipments`, authNew);
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.shipments) ? data.shipments : []);
+        return list.map(s => s?.id || s).filter(Boolean);
+      } catch { return []; }
+    }
+    async function resolveShippingIdsFromOrder(order){
+      const s1 = order?.shipping?.id;
+      if (s1) return [String(s1)];
+      const packId = order?.pack_id;
+      if (packId) {
+        const fromPack = await getPackShipments(packId);
+        if (fromPack.length) return fromPack.map(String);
+      }
+      const s3 = order?.packages?.[0]?.shipping?.id;
+      if (s3) return [String(s3)];
+      return [];
+    }
+
+    // últimos 10 días
+    const now   = new Date();
+    const from  = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
+    const limit = 50;
+    let offset  = 0;
+    const orders = [];
+
+    for (let i = 0; i < 10; i++) {
+      const url = new URL('/orders/search', 'https://api.mercadolibre.com');
+      url.searchParams.set('seller', String(sellerId));
+      url.searchParams.set('order.date_created.from', from.toISOString());
+      url.searchParams.set('order.date_created.to',   now.toISOString());
+      url.searchParams.set('sort', 'date_desc');
+      url.searchParams.set('limit', String(limit));
+      url.searchParams.set('offset', String(offset));
+      const { data } = await meliAxios.get(url.toString(), auth);
+      const results = Array.isArray(data?.results) ? data.results : [];
+      if (!results.length) break;
+      orders.push(...results);
+      if (results.length < limit) break;
+      offset += limit;
+    }
+
+    const rows = [];
+    const pad = n => String(n).padStart(2,'0');
+
+    for (const order of orders) {
+      const shippingIds = await resolveShippingIdsFromOrder(order);
+      if (!shippingIds.length) continue;
+
+      for (const shippingId of shippingIds) {
+        let shipment;
+        try { shipment = await getShipmentNew(shippingId); } catch { continue; }
+
+        const mode   = String(shipment?.logistic?.mode || shipment?.shipping_mode || '').toLowerCase();
+        const status = String(shipment?.status || '').toLowerCase();
+        if (!(mode === 'me2' && status === 'ready_to_ship')) continue;
+
+        const created = new Date(order?.date_created || shipment?.date_created || Date.now());
+        const date = `${created.getFullYear()}-${pad(created.getMonth()+1)}-${pad(created.getDate())} ${pad(created.getHours())}:${pad(created.getMinutes())}`;
+
+        const buyerNick = order?.buyer?.nickname || '';
+        const buyerName = [order?.buyer?.first_name, order?.buyer?.last_name].filter(Boolean).join(' ');
+        const buyer = (buyerName ? `${buyerName} (@${buyerNick})` : (buyerNick ? `@${buyerNick}` : '—'));
+
+        const items = Array.isArray(order?.order_items)
+          ? order.order_items.map(oi => `${oi?.item?.title || 'Item'} (${oi?.quantity || 1}u)`).join('; ')
+          : '';
+
+        rows.push({
+          orderId: String(order.id),
+          packId:  order?.pack_id ? String(order.pack_id) : null,
+          buyer,
+          date,
+          items,
+          shippingId: String(shippingId),
+          shipmentStatus: status,
+          shipmentSubstatus: String(shipment?.substatus || '').toLowerCase()
+        });
+      }
+    }
+
+    res.json({ rows });
+  } catch (err) {
+    const status = err?.response?.status || 500;
+    const detail = err?.response?.data || String(err?.message || err);
+    console.error('/ml/labels/pending error', status, detail);
+    res.status(status).json({ error: 'ml_pending_failed', detail });
+  }
 });
 
+
+app.get('/ml/labels/print', async (req, res) => {
+  try {
+    // Soportamos ?id=123 o ?ids=123,456
+    const idsParam = String(req.query.ids || req.query.id || '').trim();
+    if (!idsParam) return res.status(400).send('Falta shipment_id');
+
+    const token = await getTokenFromSheetsCached(); // mismo token que usás para ML
+    const shipIds = idsParam.split(',').map(s => s.trim()).filter(Boolean);
+
+    // 1) Descargamos el PDF base de etiquetas de ML (puede traer varias etiquetas)
+    const url = `https://api.mercadolibre.com/shipment_labels?shipment_ids=${encodeURIComponent(idsParam)}&response_type=pdf`;
+    const r = await axios.get(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      responseType: 'arraybuffer',
+      timeout: 20000,
+    });
+    let pdfBytes = Buffer.from(r.data);
+
+    // 2) Construimos el texto de agregados para cada shipment y lo unimos
+    //    Si imprimís varias a la vez, para simplificar mostramos todos los agregados concatenados.
+    //    (Si más adelante querés que cada etiqueta tenga su propio agregado, hacemos el split por páginas).
+    const textos = [];
+    for (const sid of shipIds) {
+      try {
+        const t = await buildAddonsTextForShipment(sid, token);
+        if (t) textos.push(t);
+      } catch (e) {
+        console.warn('[addons] no se pudo obtener para shipment', sid, e?.message);
+      }
+    }
+    const textoFinal = textos.join(' • ');
+
+    // 3) Sobre-escribimos el PDF con la leyenda de agregados (fuera del recuadro)
+    const pdfOut = await overlayAddonsOnPdf(pdfBytes, textoFinal);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="etiquetas.pdf"');
+    res.send(Buffer.from(pdfOut));
+  } catch (e) {
+    const status = e?.response?.status || 500;
+    const detail = e?.response?.data || e.message;
+    console.error('/ml/labels/print error', status, detail);
+    res.status(status).json({ error: 'print_failed', detail });
+  }
+});
+
+
+
+
+app.post('/ml/labels/print', requireRole(['ENVIOS','ADMIN']), async (req, res) => {
+  try {
+    const list = Array.isArray(req.body?.shipment_ids) ? req.body.shipment_ids : [];
+    const idsParam = list.map(String).filter(Boolean).join(',');
+    if (!idsParam) return res.status(400).json({ error:'bad_request', message:'shipment_ids vacío' });
+
+    const token = await getTokenFromSheetsCached();
+    const url = `https://api.mercadolibre.com/shipment_labels?shipment_ids=${encodeURIComponent(idsParam)}&response_type=pdf`;
+
+    const r = await axios.get(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      responseType: 'arraybuffer',
+      timeout: 20000,
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="etiquetas.pdf"');
+    res.send(Buffer.from(r.data));
+  } catch (e) {
+    const status = e?.response?.status || 500;
+    const detail = e?.response?.data || e.message;
+    console.error('/ml/labels/print error', status, detail);
+    res.status(status).json({ error: 'print_failed', detail });
+  }
+});
+
+// ====== /orders (core de ventas + reglas de envío)
 app.get('/orders', async (req, res) => {
   try {
     // Fallback de fechas mínimo: si faltan, usar HOY
@@ -865,14 +1246,14 @@ app.get('/orders', async (req, res) => {
         }
       }
 
-      // ===== AJUSTE NUEVO: si el envío es por fuera de ML → ENVIO = 0
+      // ===== AJUSTE: si el envío es por fuera de ML → ENVIO = 0
       try {
         if (esEnvioFueraDeML(order, shipmentData)) {
           row[IDX.ENVIO] = 0;
         }
       } catch {}
 
-      // Recalcular NETO y % ganancia sobre el orden HEADERS interno
+      // Recalcular NETO y % ganancia
       fixRowNETO(row);
       const cost = toNum(row[IDX.COSTO]);
       const neto = toNum(row[IDX.NETO]);
@@ -880,7 +1261,7 @@ app.get('/orders', async (req, res) => {
         row[IDX.GANANCIA] = round1(((neto - cost) / cost) * 100);
       }
 
-      // ——— DEBUG PAYMENTS (compacto y opcional)
+      // ——— DEBUG PAYMENTS (opcional)
       if (DEBUG_PAYMENTS) {
         try {
           const paySumm = Array.isArray(payments) ? payments.map(p => ({
@@ -901,7 +1282,7 @@ app.get('/orders', async (req, res) => {
         }
       }
 
-      // Elegir pivot y fechaPivot (string legible)
+      // Elegir pivot y fechaPivot
       const pivot = (dateBy === 'created') ? 'created' : (dateBy === 'paid') ? 'paid'
         : (Number.isFinite(paidMs) ? 'paid' : 'created');
       const fechaPivot = (Number.isFinite(paidMs) ? new Date(paidMs) : new Date(createdMs))
@@ -910,10 +1291,10 @@ app.get('/orders', async (req, res) => {
       return { order, row, payments, shipment: shipmentData, createdMs, paidMs, pivot, fechaPivot };
     })));
 
-    // Reparto del costo de envío dentro del pack/grupo (orden HEADERS)
+    // Reparto del costo de envío dentro del pack/grupo
     applyShippingSplit(items);
 
-    // Filtrar por rango real (created/paid según dateBy)
+    // Filtrar por rango real
     const inRange = items.filter(it => {
       const ms = (it.pivot === 'paid')
         ? (Number.isFinite(it.paidMs) ? it.paidMs : it.createdMs)
@@ -921,9 +1302,7 @@ app.get('/orders', async (req, res) => {
       return (ms >= baseFromMs && ms <= baseToMs);
     });
 
-    // Filas en orden HEADERS interno
     const rowsHead = inRange.map(it => it.row);
-    // Remap a orden de salida pedido
     const rowsOut = rowsHead.map(remapRowToDisplay);
 
     res.json({
@@ -1052,4 +1431,3 @@ const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => {
   console.log(`ML backend listo en http://localhost:${PORT}`);
 });
-

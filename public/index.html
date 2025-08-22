@@ -732,7 +732,7 @@
       ctx.strokeStyle='rgba(142,36,170,0.9)'; ctx.beginPath(); ctx.moveTo(lx,ly+11); ctx.lineTo(lx+12,ly+11); ctx.stroke();
     }
 
-    /* ====== Gestión de envíos: UI (demo) ====== */
+    /* ====== Gestión de envíos: UI (real) ====== */
     (function(){
       const el = {
         tab: document.getElementById('panel-envios'),
@@ -746,11 +746,6 @@
       if (!el.tab) return;
 
       const state = { rows: [], selected: new Set() };
-      const DEMO = [
-        { orderId:'2000012345', packId:'PCK-101', buyer:'Juan Pérez (@JUANP23)', date:'2025-08-18 10:14', items:'Cigüeñal XYZ (1u); Retén 20x40x7 (1u)', shippingId:'SHIP-9001' },
-        { orderId:'2000012346', packId:'PCK-102', buyer:'Ana López (@ANALO)',   date:'2025-08-18 10:22', items:'Escape MX-250 (1u)',                 shippingId:'SHIP-9002' },
-        { orderId:'2000012347', packId:'PCK-103', buyer:'Carlos Gil (@CGIL)',   date:'2025-08-18 10:37', items:'Rulemán 6203 (2u)',                  shippingId:'SHIP-9003' },
-      ];
 
       function fmtItems(str, max=80){ if (!str) return '—'; return str.length > max ? str.slice(0,max-1) + '…' : str; }
 
@@ -761,19 +756,19 @@
           el.print.disabled = true; el.selectAll.checked = false; el.foot.textContent = `0 seleccionados`; return;
         }
         const head = `
-          <div class="tr" style="display:grid; grid-template-columns: 34px 140px 140px 1fr 220px 160px; gap:10px; padding:8px 10px; border-bottom:1px solid var(--line)">
-            <div></div><div><b>Fecha</b></div><div><b>Orden</b></div><div><b>Ítems</b></div><div><b>Comprador</b></div><div><b>Shipping</b></div>
+          <div class="tr" style="display:grid; grid-template-columns: 34px 1fr 140px 140px 160px 220px; gap:10px; padding:8px 10px; border-bottom:1px solid var(--line)">
+            <div></div><div><b>Nombre</b></div><div><b>Id de venta</b></div><div><b>Fecha</b></div><div><b>Shipping</b></div><div><b>Comprador</b></div>
           </div>`;
         const body = rows.map(r => {
           const id = r.orderId, checked = state.selected.has(id) ? 'checked' : '';
           return `
-            <div class="tr" style="display:grid; grid-template-columns: 34px 140px 140px 1fr 220px 160px; gap:10px; padding:8px 10px; border-bottom:1px solid rgba(255,255,255,.05)">
+            <div class="tr" style="display:grid; grid-template-columns: 34px 1fr 140px 140px 160px 220px; gap:10px; padding:8px 10px; border-bottom:1px solid rgba(255,255,255,.05)">
               <div><input type="checkbox" data-rowchk="${id}" ${checked}></div>
-              <div>${r.date || '—'}</div>
-              <div>#${r.orderId}${r.packId ? `<div style="opacity:.7; font-size:12px">Pack: ${r.packId}</div>`:''}</div>
               <div title="${r.items || ''}">${fmtItems(r.items)}</div>
-              <div>${r.buyer || '—'}</div>
+              <div>#${r.orderId}${r.packId ? `<div style="opacity:.7; font-size:12px">Pack: ${r.packId}</div>`:''}</div>
+              <div>${r.date || '—'}</div>
               <div>${r.shippingId || '—'}</div>
+              <div>${r.buyer || '—'}</div>
             </div>`;
         }).join('');
         el.table.innerHTML = head + body;
@@ -792,9 +787,18 @@
       function syncSelectAll(){ const total = state.rows.length, sel = state.selected.size; el.selectAll.indeterminate = sel > 0 && sel < total; el.selectAll.checked = sel === total && total > 0; }
 
       el.load.addEventListener('click', async () => {
-        // Reemplazar por fetch('/ml/labels/pending', { credentials: 'include' }) cuando esté el endpoint
-        state.rows = DEMO;
+        el.table.innerHTML = `<div style="opacity:.8"><span class="spinner"></span> Cargando…</div>`;
         state.selected.clear();
+        try{
+          const r = await fetch('/ml/labels/pending', { credentials: 'include' });
+          if (!r.ok) throw new Error('HTTP '+r.status);
+          const data = await r.json();
+          state.rows = Array.isArray(data.rows) ? data.rows : [];
+        } catch(e){
+          console.error(e);
+          state.rows = [];
+          alert('No se pudieron cargar los pedidos.');
+        }
         renderTable();
       });
 
@@ -805,11 +809,33 @@
         renderTable();
       });
 
-      el.print.addEventListener('click', async () => {
-        const ids = [...state.selected]; const withSlip = el.addSlip.checked;
-        alert(`Imprimir ${ids.length} pedidos.\nAgregado: ${withSlip ? 'Sí' : 'No'}\nIDs: ${ids.join(', ')}`);
-        // Próximo: POST /ml/labels/print -> PDF
-      });
+     el.print.addEventListener('click', async () => {
+  // Por ahora: 1 etiqueta a la vez (paso simple)
+  const selectedOrderIds = [...state.selected];
+  if (selectedOrderIds.length === 0) {
+    alert('Seleccioná un pedido.');
+    return;
+  }
+  if (selectedOrderIds.length > 1) {
+    alert('Por ahora imprimimos de a una etiqueta. Seleccioná solo un pedido.');
+    return;
+  }
+
+  // Buscamos el shipmentId del pedido elegido
+  const selectedOrderId = selectedOrderIds[0];
+  const row = state.rows.find(r => String(r.orderId) === String(selectedOrderId));
+  const shipmentId = row?.shippingId;
+
+  if (!shipmentId) {
+    alert('Ese pedido no tiene shippingId disponible.');
+    return;
+  }
+
+  // Abrimos el PDF en una pestaña nueva (el navegador te deja imprimir desde ahí)
+  const w = window.open(`/ml/labels/print?id=${encodeURIComponent(shipmentId)}`, '_blank');
+  if (!w) alert('El navegador bloqueó la ventana. Permití pop-ups para este sitio.');
+});
+
 
       renderTable();
     })();
@@ -927,4 +953,3 @@
   </script>
 </body>
 </html>
-
