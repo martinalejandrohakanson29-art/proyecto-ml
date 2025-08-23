@@ -1279,7 +1279,7 @@ app.get('/ml/labels/print', async (req, res) => {
     // 5) Estampar 1 texto por página (página i => textos[i])
     const pdfOut = await overlayAddonsOnPdfGrid(pdfBytes, textos, {
   cols: 3,      // 3 columnas por hoja
-  left: 24,     // margen izquierdo
+  left: 50,     // margen izquierdo
   y: 120,        // altura desde el borde inferior de la hoja (subilo si lo querés más arriba)
   colGap: 12,   // separación entre columnas
 });
