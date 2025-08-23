@@ -749,39 +749,65 @@
 
       function fmtItems(str, max=80){ if (!str) return '—'; return str.length > max ? str.slice(0,max-1) + '…' : str; }
 
-      function renderTable() {
-        const rows = state.rows;
-        if (!rows.length) {
-          el.table.innerHTML = `<div style="opacity:.8">No hay pedidos cargados. Click en <b>Cargar pedidos</b>.</div>`;
-          el.print.disabled = true; el.selectAll.checked = false; el.foot.textContent = `0 seleccionados`; return;
-        }
-        const head = `
-          <div class="tr" style="display:grid; grid-template-columns: 34px 1fr 140px 140px 160px 220px; gap:10px; padding:8px 10px; border-bottom:1px solid var(--line)">
-            <div></div><div><b>Nombre</b></div><div><b>Id de venta</b></div><div><b>Fecha</b></div><div><b>Shipping</b></div><div><b>Comprador</b></div>
-          </div>`;
-        const body = rows.map(r => {
-          const id = r.orderId, checked = state.selected.has(id) ? 'checked' : '';
-          return `
-            <div class="tr" style="display:grid; grid-template-columns: 34px 1fr 140px 140px 160px 220px; gap:10px; padding:8px 10px; border-bottom:1px solid rgba(255,255,255,.05)">
-              <div><input type="checkbox" data-rowchk="${id}" ${checked}></div>
-              <div title="${r.items || ''}">${fmtItems(r.items)}</div>
-              <div>#${r.orderId}${r.packId ? `<div style="opacity:.7; font-size:12px">Pack: ${r.packId}</div>`:''}</div>
-              <div>${r.date || '—'}</div>
-              <div>${r.shippingId || '—'}</div>
-              <div>${r.buyer || '—'}</div>
-            </div>`;
-        }).join('');
-        el.table.innerHTML = head + body;
+     function renderTable() {
+  const rows = state.rows;
+  if (!rows.length) {
+    el.table.innerHTML = `<div style="opacity:.8">No hay pedidos cargados. Click en <b>Cargar pedidos</b>.</div>`;
+    el.print.disabled = true;
+    el.selectAll.checked = false;
+    el.foot.textContent = `0 seleccionados`;
+    return;
+  }
 
-        el.table.querySelectorAll('input[type="checkbox"][data-rowchk]').forEach(chk => {
-          chk.addEventListener('change', (e) => {
-            const id = e.target.getAttribute('data-rowchk');
-            if (e.target.checked) state.selected.add(id); else state.selected.delete(id);
-            syncFooter(); syncSelectAll();
-          });
-        });
-        syncFooter(); syncSelectAll();
-      }
+  const grid = 'display:grid; grid-template-columns: 34px 1fr 140px 160px 140px 220px 150px; gap:10px; padding:8px 10px';
+
+  const head = `
+    <div class="tr" style="${grid}; border-bottom:1px solid var(--line)">
+      <div></div>
+      <div><b>Nombre</b></div>
+      <div><b>Id de venta</b></div>
+      <div><b>Shipping</b></div>
+      <div><b>Fecha</b></div>
+      <div><b>Comprador</b></div>
+      <div><b>Método de envío</b></div>
+    </div>`;
+
+  const body = rows.map(r => {
+    const id = r.orderId;
+    const checked = state.selected.has(id) ? 'checked' : '';
+    const metodo = r.isFlex
+      ? `<span style="color:rgb(var(--red-rgb)); font-weight:700">FLEX</span>`
+      : (r.serviceName || 'Estándar');
+
+    return `
+      <div class="tr" style="${grid}; border-bottom:1px solid rgba(255,255,255,.05)">
+        <div><input type="checkbox" data-rowchk="${id}" ${checked}></div>
+        <div title="${r.items || ''}">${fmtItems(r.items)}</div>
+        <div>#${r.orderId}${r.packId ? `<div class="muted" style="font-size:12px">Pack: ${r.packId}</div>` : ''}</div>
+        <div>${r.shippingId || '—'}</div>
+        <div>${r.date || '—'}</div>
+        <div>${r.buyer || '—'}</div>
+        <div>${metodo}</div>
+      </div>`;
+  }).join('');
+
+  el.table.innerHTML = head + body;
+
+  // Eventos de selección por fila
+  el.table.querySelectorAll('input[type="checkbox"][data-rowchk]').forEach(chk => {
+    chk.addEventListener('change', (e) => {
+      const id = e.target.getAttribute('data-rowchk');
+      if (e.target.checked) state.selected.add(id);
+      else state.selected.delete(id);
+      syncFooter();
+      syncSelectAll();
+    });
+  });
+
+  syncFooter();
+  syncSelectAll();
+}
+
 
       function syncFooter(){ el.foot.textContent = `${state.selected.size} seleccionados`; el.print.disabled = state.selected.size === 0; }
       function syncSelectAll(){ const total = state.rows.length, sel = state.selected.size; el.selectAll.indeterminate = sel > 0 && sel < total; el.selectAll.checked = sel === total && total > 0; }
