@@ -810,31 +810,32 @@
       });
 
      el.print.addEventListener('click', async () => {
-  // Por ahora: 1 etiqueta a la vez (paso simple)
   const selectedOrderIds = [...state.selected];
   if (selectedOrderIds.length === 0) {
-    alert('Seleccioná un pedido.');
+    alert('Seleccioná al menos un pedido.');
     return;
   }
-  if (selectedOrderIds.length > 1) {
-    alert('Por ahora imprimimos de a una etiqueta. Seleccioná solo un pedido.');
-    return;
-  }
-
-  // Buscamos el shipmentId del pedido elegido
-  const selectedOrderId = selectedOrderIds[0];
-  const row = state.rows.find(r => String(r.orderId) === String(selectedOrderId));
-  const shipmentId = row?.shippingId;
-
-  if (!shipmentId) {
-    alert('Ese pedido no tiene shippingId disponible.');
+  if (selectedOrderIds.length > 3) {
+    alert('Máximo 3 etiquetas por tanda.');
     return;
   }
 
-  // Abrimos el PDF en una pestaña nueva (el navegador te deja imprimir desde ahí)
-  const w = window.open(`/ml/labels/print?id=${encodeURIComponent(shipmentId)}`, '_blank');
+  // Pasamos de orderId -> shipmentId (vienen del /ml/labels/pending)
+  const shipIds = [];
+  for (const oid of selectedOrderIds) {
+    const row = state.rows.find(r => String(r.orderId) === String(oid));
+    if (row?.shippingId) shipIds.push(row.shippingId);
+  }
+  if (shipIds.length === 0) {
+    alert('No encontramos shippingId para los seleccionados.');
+    return;
+  }
+
+  // Abrimos un PDF con las 1..3 etiquetas en una sola pestaña
+  const w = window.open(`/ml/labels/print?ids=${encodeURIComponent(shipIds.join(','))}`, '_blank');
   if (!w) alert('El navegador bloqueó la ventana. Permití pop-ups para este sitio.');
 });
+
 
 
       renderTable();
@@ -953,3 +954,4 @@
   </script>
 </body>
 </html>
+
