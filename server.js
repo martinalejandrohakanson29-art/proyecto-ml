@@ -1189,12 +1189,12 @@ app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) 
         let shipment;
         try { shipment = await getShipmentNew(shippingId); } catch { continue; }
 
-        // modo y estado
+        // modo y estado mínimos para imprimir
         const mode   = String(shipment?.logistic?.mode || shipment?.shipping_mode || '').toLowerCase();
         const status = String(shipment?.status || '').toLowerCase();
         if (!(mode === 'me2' && status === 'ready_to_ship')) continue;
 
-        // ⬇️ tipo de logística (robusto contra variantes de campo)
+        // tipo de logística + exclusión FULL
         const logisticType = String(
           shipment?.logistic?.type ??
           shipment?.logistic_type ??
@@ -1202,9 +1202,24 @@ app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) 
           order?.shipping?.logistic_type ??
           ''
         ).toLowerCase();
-
-        // ⬅️ excluir FULL
         if (logisticType === 'fulfillment') continue;
+
+        // === FLEX detection (mejorado con x-format-new)
+        const tags          = new Set((shipment?.tags || []).map(String));
+        const serviceName   = String(
+          shipment?.lead_time?.shipping_method?.name || // x-format-new
+          shipment?.shipping_option?.name ||            // fallback legacy
+          ''
+        );
+        const addrTypes = (shipment?.origin?.shipping_address?.types || [])
+          .map(s => String(s).toLowerCase());
+        const deliveryType = String(shipment?.lead_time?.delivery_type || '').toLowerCase();
+
+        const isFlex =
+          serviceName.toLowerCase().includes('flex') ||
+          tags.has('flex') ||
+          addrTypes.includes('flex_pickup') ||
+          deliveryType.includes('same_day');
 
         const created = new Date(order?.date_created || shipment?.date_created || Date.now());
         const date = `${created.getFullYear()}-${pad(created.getMonth()+1)}-${pad(created.getDate())} ${pad(created.getHours())}:${pad(created.getMinutes())}`;
@@ -1226,7 +1241,9 @@ app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) 
           shippingId: String(shippingId),
           shipmentStatus: status,
           shipmentSubstatus: String(shipment?.substatus || '').toLowerCase(),
-          logisticType // lo dejamos visible por si hace falta depurar
+          logisticType,
+          isFlex,                        // 👈 ahora más preciso
+          serviceName                    // ej.: "Flex / Mismo día"
         });
       }
     }
@@ -1239,6 +1256,7 @@ app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) 
     res.status(status).json({ error: 'ml_pending_failed', detail });
   }
 });
+
 
 
 app.get('/ml/labels/print', async (req, res) => {
