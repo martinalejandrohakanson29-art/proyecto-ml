@@ -483,7 +483,217 @@ async function overlayAddonsOnPdf(pdfBytes, text) {
   return await pdfDoc.save();
 }
 
+async function overlayAddonsOnPdfGrid(pdfBytes, textos, opts = {}) {
+  const cols   = Number(opts.cols ?? 3);
+  const left   = Number(opts.left ?? 24);
+  const yBase  = Number(opts.y ?? 120);   // ajustá desde el endpoint si querés
+  const colGap = Number(opts.colGap ?? 12);
+  const padX = 6, padY = 4;
+  const fontSize = 10;
+  const lineGap  = 2;
 
+  const pdf = await PDFDocument.load(pdfBytes);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+  // Split seguro: no corta "7,7". Separa por • ; | o ", " (coma con espacio)
+  function splitItems(raw) {
+    return String(raw || '')
+      .replace(/\r?\n/g, '\n') // respetá saltos de línea si vinieran
+      .split(/(?:\n|[•;|]|\s*,\s+(?!\d))/g)
+      .map(s => s.trim())
+      .filter(Boolean);
+  }
+
+  function wrapLines(text, maxWidth, fontObj, size) {
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    const lines = [];
+    let cur = '';
+    for (const w of words) {
+      const tryLine = cur ? (cur + ' ' + w) : w;
+      const width = fontObj.widthOfTextAtSize(tryLine, size);
+      if (width <= maxWidth || !cur) cur = tryLine;
+      else { lines.push(cur); cur = w; }
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  }
+
+  const pages = pdf.getPages();
+  for (let p = 0; p < pages.length; p++) {
+    const page = pages[p];
+    const { width } = page.getSize();
+
+    const usableWidth = width - left * 2 - colGap * (cols - 1);
+    const colWidth = usableWidth / cols;
+    const maxTextWidth = colWidth - padX * 2;
+
+    for (let c = 0; c < cols; c++) {
+      const idx = p * cols + c;
+      const raw = textos[idx] || '';
+      if (!raw.trim()) continue;
+
+      const items = splitItems(raw); // ← uno por línea
+      if (!items.length) continue;
+
+      // Precalcular alto: “Incluye:” + items envueltos
+      const titulo = 'Incluye:';
+      const tituloWidth = fontBold.widthOfTextAtSize(titulo, fontSize);
+      const lineHeight = fontSize + lineGap;
+
+      // envolver cada item y aplanar
+      const wrapped = [];
+      for (const item of items) {
+        const lines = wrapLines(item, maxTextWidth, font, fontSize);
+        if (lines.length) wrapped.push({ lines });
+      }
+
+      const itemsLinesCount = wrapped.reduce((acc, w) => acc + w.lines.length, 0);
+      const textBlockHeight = Math.max(lineHeight, itemsLinesCount * lineHeight);
+      const boxHeight = textBlockHeight + padY * 2;
+
+      const xLeft = left + c * (colWidth + colGap);
+      const y = yBase;
+
+      // Fondo blanco
+      page.drawRectangle({
+        x: xLeft,
+        y,
+        width: colWidth,
+        height: boxHeight,
+        color: rgb(1, 1, 1),
+        opacity: 0.95,
+        borderColor: rgb(0.9, 0.9, 0.9),
+        borderWidth: 0.5,
+      });
+
+      // “Incluye:”
+      const titleX = xLeft + padX;
+      const titleY = y + boxHeight - padY - fontSize;
+      page.drawText(titulo, {
+        x: titleX, y: titleY, size: fontSize, font: fontBold, color: rgb(0, 0, 0),
+      });
+
+      // Items, uno debajo del otro
+      let yCursor = titleY - lineHeight;
+      for (const w of wrapped) {
+        for (const ln of w.lines) {
+          page.drawText(ln, {
+            x: xLeft + padX,
+            y: yCursor,
+            size: fontSize,
+            font,
+            color: rgb(0, 0, 0),
+          });
+          yCursor -= lineHeight;
+        }
+      }
+    }
+  }
+
+  return await pdf.save();
+}
+
+
+
+
+async function overlayAddonsOnPdfPerPage(pdfBytes, textosPorPagina, opts = {}) {
+  const yBase = Number(opts.y ?? 24);
+  const left  = Number(opts.left ?? 24);
+  const maxWidthPct = Number(opts.maxWidthPct ?? 0.9);
+
+  const pdf = await PDFDocument.load(pdfBytes);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+  const fontSize = 10;           // tamaño del texto de “agregados”
+  const lineGap  = 2;            // separación entre líneas
+  const padX = 6, padY = 4;      // padding del recuadro de fondo
+
+  function wrapLines(text, maxWidth, fontObj, size) {
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    const lines = [];
+    let cur = '';
+    for (const w of words) {
+      const tryLine = cur ? (cur + ' ' + w) : w;
+      const width = fontObj.widthOfTextAtSize(tryLine, size);
+      if (width <= maxWidth || !cur) {
+        cur = tryLine;
+      } else {
+        lines.push(cur);
+        cur = w;
+      }
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  }
+
+  const pages = pdf.getPages();
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+    const { width } = page.getSize();
+    const maxTextWidth = width * maxWidthPct - left * 2;
+
+    const raw = textosPorPagina[i] || '';               // texto para esta página
+    if (!raw.trim()) continue;                           // sin agregado -> no dibujar
+
+    // Título “Incluye:” + texto envuelto
+    const titulo = 'Incluye:';
+    const tituloWidth = fontBold.widthOfTextAtSize(titulo, fontSize);
+    const lines = wrapLines(raw, maxTextWidth, font, fontSize);
+
+    // Altura del bloque
+    const lineHeight = fontSize + lineGap;
+    const textBlockHeight = lines.length * lineHeight;
+    const boxHeight = Math.max(lineHeight, textBlockHeight) + padY * 2;
+
+    // Fondo blanco para legibilidad, al pie de la página
+    const y = yBase;
+    page.drawRectangle({
+      x: left - padX,
+      y: y - padY,
+      width: Math.min(maxTextWidth + padX * 2 + tituloWidth + 8, width - left * 2),
+      height: boxHeight,
+      color: rgb(1, 1, 1),
+      opacity: 0.95,
+      borderColor: rgb(0.9, 0.9, 0.9),
+      borderWidth: 0.5,
+    });
+
+    // “Incluye:”
+    page.drawText(titulo, {
+      x: left,
+      y: y + boxHeight - padY - fontSize,
+      size: fontSize,
+      font: fontBold,
+      color: rgb(0, 0, 0),
+    });
+
+    // Texto envuelto (al lado de “Incluye:” si entra, si no debajo)
+    let xText = left + tituloWidth + 8;
+    let yText = y + boxHeight - padY - fontSize;
+
+    // si el primer renglón no entra al lado del título, lo bajo a la línea siguiente
+    if (lines.length && font.widthOfTextAtSize(lines[0], fontSize) > (maxTextWidth - tituloWidth - 8)) {
+      xText = left;
+      yText -= lineHeight;
+    }
+
+    for (let li = 0; li < lines.length; li++) {
+      page.drawText(lines[li], {
+        x: xText,
+        y: yText - li * lineHeight,
+        size: fontSize,
+        font,
+        color: rgb(0, 0, 0),
+      });
+      // a partir del 2º renglón, alineo a la izquierda total
+      xText = left;
+    }
+  }
+
+  return await pdf.save();
+}
 
 
 
@@ -979,9 +1189,22 @@ app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) 
         let shipment;
         try { shipment = await getShipmentNew(shippingId); } catch { continue; }
 
+        // modo y estado
         const mode   = String(shipment?.logistic?.mode || shipment?.shipping_mode || '').toLowerCase();
         const status = String(shipment?.status || '').toLowerCase();
         if (!(mode === 'me2' && status === 'ready_to_ship')) continue;
+
+        // ⬇️ tipo de logística (robusto contra variantes de campo)
+        const logisticType = String(
+          shipment?.logistic?.type ??
+          shipment?.logistic_type ??
+          shipment?.shipping_logistic_type ??
+          order?.shipping?.logistic_type ??
+          ''
+        ).toLowerCase();
+
+        // ⬅️ excluir FULL
+        if (logisticType === 'fulfillment') continue;
 
         const created = new Date(order?.date_created || shipment?.date_created || Date.now());
         const date = `${created.getFullYear()}-${pad(created.getMonth()+1)}-${pad(created.getDate())} ${pad(created.getHours())}:${pad(created.getMinutes())}`;
@@ -1002,7 +1225,8 @@ app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) 
           items,
           shippingId: String(shippingId),
           shipmentStatus: status,
-          shipmentSubstatus: String(shipment?.substatus || '').toLowerCase()
+          shipmentSubstatus: String(shipment?.substatus || '').toLowerCase(),
+          logisticType // lo dejamos visible por si hace falta depurar
         });
       }
     }
@@ -1019,49 +1243,59 @@ app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) 
 
 app.get('/ml/labels/print', async (req, res) => {
   try {
-    // Soportamos ?id=123 o ?ids=123,456
+    // 1) IDs de shipments (1..3)
     const idsParam = String(req.query.ids || req.query.id || '').trim();
     if (!idsParam) return res.status(400).send('Falta shipment_id');
 
-    const token = await getTokenFromSheetsCached(); // mismo token que usás para ML
     const shipIds = idsParam.split(',').map(s => s.trim()).filter(Boolean);
+    if (shipIds.length > 3) {
+      return res.status(400).send('Máximo 3 etiquetas por impresión');
+    }
 
-    // 1) Descargamos el PDF base de etiquetas de ML (puede traer varias etiquetas)
+    // 2) Token
+    const token = await getTokenFromSheetsCached();
+
+    // 3) Descargar PDF base desde ML
     const url = `https://api.mercadolibre.com/shipment_labels?shipment_ids=${encodeURIComponent(idsParam)}&response_type=pdf`;
     const r = await axios.get(url, {
       headers: { Authorization: `Bearer ${token}` },
       responseType: 'arraybuffer',
       timeout: 20000,
     });
-    let pdfBytes = Buffer.from(r.data);
+    const pdfBytes = Buffer.isBuffer(r.data) ? r.data : Buffer.from(r.data);
 
-    // 2) Construimos el texto de agregados para cada shipment y lo unimos
-    //    Si imprimís varias a la vez, para simplificar mostramos todos los agregados concatenados.
-    //    (Si más adelante querés que cada etiqueta tenga su propio agregado, hacemos el split por páginas).
+    // 4) Construir textos (agregados) para CADA shipment en orden
     const textos = [];
     for (const sid of shipIds) {
       try {
         const t = await buildAddonsTextForShipment(sid, token);
-        if (t) textos.push(t);
+        textos.push(t || '');
       } catch (e) {
         console.warn('[addons] no se pudo obtener para shipment', sid, e?.message);
+        textos.push('');
       }
     }
-    const textoFinal = textos.join(' • ');
 
-    // 3) Sobre-escribimos el PDF con la leyenda de agregados (fuera del recuadro)
-    const pdfOut = await overlayAddonsOnPdf(pdfBytes, textoFinal);
+    // 5) Estampar 1 texto por página (página i => textos[i])
+    const pdfOut = await overlayAddonsOnPdfGrid(pdfBytes, textos, {
+  cols: 3,      // 3 columnas por hoja
+  left: 24,     // margen izquierdo
+  y: 120,        // altura desde el borde inferior de la hoja (subilo si lo querés más arriba)
+  colGap: 12,   // separación entre columnas
+});
 
+    // 6) Responder PDF (dejalo igual)
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="etiquetas.pdf"');
     res.send(Buffer.from(pdfOut));
   } catch (e) {
     const status = e?.response?.status || 500;
-    const detail = e?.response?.data || e.message;
+    const detail = e?.response?.data || String(e?.message || e);
     console.error('/ml/labels/print error', status, detail);
     res.status(status).json({ error: 'print_failed', detail });
   }
 });
+
 
 
 
@@ -1431,3 +1665,4 @@ const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => {
   console.log(`ML backend listo en http://localhost:${PORT}`);
 });
+
