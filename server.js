@@ -1194,57 +1194,64 @@ app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) 
         const status = String(shipment?.status || '').toLowerCase();
         if (!(mode === 'me2' && status === 'ready_to_ship')) continue;
 
-        // tipo de logística + exclusión FULL
-        const logisticType = String(
-          shipment?.logistic?.type ??
-          shipment?.logistic_type ??
-          shipment?.shipping_logistic_type ??
-          order?.shipping?.logistic_type ??
-          ''
-        ).toLowerCase();
-        if (logisticType === 'fulfillment') continue;
+       // tipo de logística + exclusión FULL
+const logisticType = String(
+  shipment?.logistic?.type ??
+  shipment?.logistic_type ??
+  shipment?.shipping_logistic_type ??
+  order?.shipping?.logistic_type ??
+  ''
+).toLowerCase();
+if (logisticType === 'fulfillment') continue;
 
-        // === FLEX detection (mejorado con x-format-new)
-        const tags          = new Set((shipment?.tags || []).map(String));
-        const serviceName   = String(
-          shipment?.lead_time?.shipping_method?.name || // x-format-new
-          shipment?.shipping_option?.name ||            // fallback legacy
-          ''
-        );
-        const addrTypes = (shipment?.origin?.shipping_address?.types || [])
-          .map(s => String(s).toLowerCase());
-        const deliveryType = String(shipment?.lead_time?.delivery_type || '').toLowerCase();
+// === FLEX detection (afinada, sin falsos positivos por flex_pickup)
+const tagsArr = Array.isArray(shipment?.tags) ? shipment.tags : [];
+const tagsLc  = tagsArr.map(s => String(s).toLowerCase());
+const tags    = new Set(tagsLc);
 
-        const isFlex =
-          serviceName.toLowerCase().includes('flex') ||
-          tags.has('flex') ||
-          addrTypes.includes('flex_pickup') ||
-          deliveryType.includes('same_day');
+const serviceName = String(
+  shipment?.lead_time?.shipping_method?.name || // x-format-new
+  shipment?.shipping_option?.name ||            // fallback legacy
+  ''
+);
+const serviceLc = serviceName.toLowerCase();
 
-        const created = new Date(order?.date_created || shipment?.date_created || Date.now());
-        const date = `${created.getFullYear()}-${pad(created.getMonth()+1)}-${pad(created.getDate())} ${pad(created.getHours())}:${pad(created.getMinutes())}`;
+const deliveryType = String(shipment?.lead_time?.delivery_type || '').toLowerCase();
+const isSelfService = (logisticType === 'self_service') || tags.has('self_service');
 
-        const buyerNick = order?.buyer?.nickname || '';
-        const buyerName = [order?.buyer?.first_name, order?.buyer?.last_name].filter(Boolean).join(' ');
-        const buyer = (buyerName ? `${buyerName} (@${buyerNick})` : (buyerNick ? `@${buyerNick}` : '—'));
+// Señales “fuertes”
+const mentionFlex = serviceLc.includes('flex');                 // “Flex”, “Envío Flex…”
+const sameDay = deliveryType.includes('same_day')               // delivery_type same_day
+             || serviceLc.includes('mismo día')
+             || serviceLc.includes('same day');
 
-        const items = Array.isArray(order?.order_items)
-          ? order.order_items.map(oi => `${oi?.item?.title || 'Item'} (${oi?.quantity || 1}u)`).join('; ')
-          : '';
+// Regla final: FLEX solo si…
+const isFlex = mentionFlex || tags.has('flex') || (sameDay && isSelfService);
 
-        rows.push({
-          orderId: String(order.id),
-          packId:  order?.pack_id ? String(order.pack_id) : null,
-          buyer,
-          date,
-          items,
-          shippingId: String(shippingId),
-          shipmentStatus: status,
-          shipmentSubstatus: String(shipment?.substatus || '').toLowerCase(),
-          logisticType,
-          isFlex,                        // 👈 ahora más preciso
-          serviceName                    // ej.: "Flex / Mismo día"
-        });
+const created = new Date(order?.date_created || shipment?.date_created || Date.now());
+const date = `${created.getFullYear()}-${pad(created.getMonth()+1)}-${pad(created.getDate())} ${pad(created.getHours())}:${pad(created.getMinutes())}`;
+
+const buyerNick = order?.buyer?.nickname || '';
+const buyerName = [order?.buyer?.first_name, order?.buyer?.last_name].filter(Boolean).join(' ');
+const buyer = (buyerName ? `${buyerName} (@${buyerNick})` : (buyerNick ? `@${buyerNick}` : '—'));
+
+const items = Array.isArray(order?.order_items)
+  ? order.order_items.map(oi => `${oi?.item?.title || 'Item'} (${oi?.quantity || 1}u)`).join('; ')
+  : '';
+
+rows.push({
+  orderId: String(order.id),
+  packId:  order?.pack_id ? String(order.pack_id) : null,
+  buyer,
+  date,
+  items,
+  shippingId: String(shippingId),
+  shipmentStatus: status,
+  shipmentSubstatus: String(shipment?.substatus || '').toLowerCase(),
+  logisticType,
+  isFlex,         // 👈 ahora más preciso
+  serviceName     // ej.: “Flex / Mismo día”, “Entrega a domicilio”, etc.
+});
       }
     }
 
@@ -1256,6 +1263,7 @@ app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) 
     res.status(status).json({ error: 'ml_pending_failed', detail });
   }
 });
+ 
 
 
 
