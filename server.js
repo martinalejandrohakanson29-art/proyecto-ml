@@ -1247,10 +1247,14 @@ app.get('/ml/labels/print', async (req, res) => {
     const idsParam = String(req.query.ids || req.query.id || '').trim();
     if (!idsParam) return res.status(400).send('Falta shipment_id');
 
-    const shipIds = idsParam.split(',').map(s => s.trim()).filter(Boolean);
-    if (shipIds.length > 3) {
-      return res.status(400).send('Máximo 3 etiquetas por impresión');
-    }
+   const shipIds = idsParam.split(',').map(s => s.trim()).filter(Boolean);
+
+// nuevo límite (subilo cuando quieras)
+const MAX_PER_BATCH = 30;
+if (shipIds.length > MAX_PER_BATCH) {
+  return res.status(400).send(`Máximo ${MAX_PER_BATCH} etiquetas por impresión`);
+}
+
 
     // 2) Token
     const token = await getTokenFromSheetsCached();
