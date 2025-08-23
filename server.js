@@ -1194,7 +1194,7 @@ app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) 
         const status = String(shipment?.status || '').toLowerCase();
         if (!(mode === 'me2' && status === 'ready_to_ship')) continue;
 
-       // tipo de logística + exclusión FULL
+      // tipo de logística + exclusión FULL
 const logisticType = String(
   shipment?.logistic?.type ??
   shipment?.logistic_type ??
@@ -1204,29 +1204,19 @@ const logisticType = String(
 ).toLowerCase();
 if (logisticType === 'fulfillment') continue;
 
-// === FLEX detection (afinada, sin falsos positivos por flex_pickup)
-const tagsArr = Array.isArray(shipment?.tags) ? shipment.tags : [];
-const tagsLc  = tagsArr.map(s => String(s).toLowerCase());
-const tags    = new Set(tagsLc);
-
+// === Mapeo simple a FLEX/Colecta según servicio de la API
 const serviceName = String(
   shipment?.lead_time?.shipping_method?.name || // x-format-new
   shipment?.shipping_option?.name ||            // fallback legacy
   ''
 );
-const serviceLc = serviceName.toLowerCase();
 
-const deliveryType = String(shipment?.lead_time?.delivery_type || '').toLowerCase();
-const isSelfService = (logisticType === 'self_service') || tags.has('self_service');
+const serviceNorm = serviceName
+  .toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // sin acentos
 
-// Señales “fuertes”
-const mentionFlex = serviceLc.includes('flex');                 // “Flex”, “Envío Flex…”
-const sameDay = deliveryType.includes('same_day')               // delivery_type same_day
-             || serviceLc.includes('mismo día')
-             || serviceLc.includes('same day');
-
-// Regla final: FLEX solo si…
-const isFlex = mentionFlex || tags.has('flex') || (sameDay && isSelfService);
+const isFlex = serviceNorm.includes('prioritario a domicilio'); // <- TU REGLA
+const methodLabel = isFlex ? 'FLEX' : 'Colecta';
 
 const created = new Date(order?.date_created || shipment?.date_created || Date.now());
 const date = `${created.getFullYear()}-${pad(created.getMonth()+1)}-${pad(created.getDate())} ${pad(created.getHours())}:${pad(created.getMinutes())}`;
@@ -1249,9 +1239,11 @@ rows.push({
   shipmentStatus: status,
   shipmentSubstatus: String(shipment?.substatus || '').toLowerCase(),
   logisticType,
-  isFlex,         // 👈 ahora más preciso
-  serviceName     // ej.: “Flex / Mismo día”, “Entrega a domicilio”, etc.
+  isFlex,          // true si “Prioritario a domicilio”
+  serviceName,     // nombre crudo por si querés verlo
+  methodLabel      // “FLEX” o “Colecta”
 });
+
       }
     }
 
