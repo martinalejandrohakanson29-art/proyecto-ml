@@ -98,13 +98,18 @@
       .col-3,.col-4,.col-6{grid-column: 1 / -1}
     }
 /* Fondo mosaico que se ajusta al ancho de la grilla de envíos */
-.tableWrap{ position: relative; }
+.tableWrap{
+  position: relative;
+  width: 100%;
+  overflow: hidden;      /* recorta dentro del borde redondeado */
+  border-radius: 10px;
+}
 .tableWrap .mosaicBg{
   position: absolute; inset: 0;
-  border-radius: 10px;
   background: repeating-linear-gradient(45deg, rgba(255,255,255,.03) 0 6px, transparent 6px 12px);
   pointer-events: none;
 }
+
 
     /* ===== Login overlay ===== */
     .authbox{ display:flex; gap:8px; align-items:center; }
@@ -767,8 +772,10 @@ function renderTable() {
     return;
   }
 
-  //           ⬇⬇ columnas:   chk   Nombre             IdVenta Shipping Fecha  Comprador          Método
-  const grid = 'display:grid; grid-template-columns: 34px minmax(260px,2fr) 200px 200px 170px 300px 160px; gap:12px; padding:10px 12px';
+  
+  //           ⬇⬇ columnas: chk   Nombre               IdVenta          Shipping         Fecha           Comprador          Método
+const grid = 'display:grid; grid-template-columns: 34px minmax(240px,2fr) minmax(170px,1.2fr) minmax(140px,1.1fr) minmax(140px,1.1fr) minmax(220px,1.6fr) minmax(120px,0.9fr); gap:12px; padding:10px 12px';
+
 
   const head = `
     <div class="tr" style="${grid}; border-bottom:1px solid var(--line)">
