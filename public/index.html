@@ -759,7 +759,8 @@ function renderTable() {
     return;
   }
 
-  const grid = 'display:grid; grid-template-columns: 34px 1fr 140px 160px 140px 220px 150px; gap:10px; padding:8px 10px';
+  //           ⬇⬇ columnas:   chk   Nombre             IdVenta Shipping Fecha  Comprador          Método
+  const grid = 'display:grid; grid-template-columns: 34px minmax(260px,2fr) 200px 200px 170px 300px 160px; gap:12px; padding:10px 12px';
 
   const head = `
     <div class="tr" style="${grid}; border-bottom:1px solid var(--line)">
@@ -780,13 +781,13 @@ function renderTable() {
       : `<span title="${r.serviceName || ''}">Colecta</span>`;
 
     return `
-      <div class="tr" style="${grid}; border-bottom:1px solid rgba(255,255,255,.05)">
+      <div class="tr" style="${grid}; border-bottom:1px solid rgba(255,255,255,.06)">
         <div><input type="checkbox" data-rowchk="${id}" ${checked}></div>
-        <div title="${r.items || ''}">${fmtItems(r.items)}</div>
+        <div style="overflow-wrap:anywhere" title="${r.items || ''}">${fmtItems(r.items)}</div>
         <div>#${r.orderId}${r.packId ? `<div class="muted" style="font-size:12px">Pack: ${r.packId}</div>` : ''}</div>
         <div>${r.shippingId || '—'}</div>
         <div>${r.date || '—'}</div>
-        <div>${r.buyer || '—'}</div>
+        <div style="overflow-wrap:anywhere">${r.buyer || '—'}</div>
         <div>${metodoHtml}</div>
       </div>`;
   }).join('');
@@ -806,7 +807,6 @@ function renderTable() {
   syncFooter();
   syncSelectAll();
 }
-
 
 
       function syncFooter(){ el.foot.textContent = `${state.selected.size} seleccionados`; el.print.disabled = state.selected.size === 0; }
