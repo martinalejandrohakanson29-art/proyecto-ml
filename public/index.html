@@ -97,6 +97,14 @@
       .g-controls{grid-template-columns:repeat(4,1fr)}
       .col-3,.col-4,.col-6{grid-column: 1 / -1}
     }
+/* Fondo mosaico que se ajusta al ancho de la grilla de envíos */
+.tableWrap{ position: relative; }
+.tableWrap .mosaicBg{
+  position: absolute; inset: 0;
+  border-radius: 10px;
+  background: repeating-linear-gradient(45deg, rgba(255,255,255,.03) 0 6px, transparent 6px 12px);
+  pointer-events: none;
+}
 
     /* ===== Login overlay ===== */
     .authbox{ display:flex; gap:8px; align-items:center; }
@@ -792,7 +800,13 @@ function renderTable() {
       </div>`;
   }).join('');
 
-  el.table.innerHTML = head + body;
+  el.table.innerHTML = `
+  <div class="tableWrap">
+    <div class="mosaicBg"></div>
+    ${head + body}
+  </div>
+`;
+
 
   // checkboxes
   el.table.querySelectorAll('input[type="checkbox"][data-rowchk]').forEach(chk => {
