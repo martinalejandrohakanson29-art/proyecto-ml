@@ -192,6 +192,41 @@ function esEnvioFueraDeML(order, shipment) {
   return noEsME2 || selfService || flexPorFuera;
 }
 
+
+
+/**
+ * Agrega un “header” (margen superior) de N puntos a cada página del PDF.
+ * Reescala levemente la etiqueta para que no se corte y quede espacio arriba.
+ * @param {Uint8Array|ArrayBuffer} pdfBytes
+ * @param {number} header Alto del margen superior en puntos (1 cm ≈ 28.35pt)
+ * @returns {Promise<Uint8Array>}
+ */
+// --- Helper: agrega margen superior y baja levemente la etiqueta en cada página ---
+async function repackPdfWithTopHeader(pdfBytes, header = 72) {
+  const src = await PDFDocument.load(pdfBytes);
+  const out = await PDFDocument.create();
+
+  for (const p of src.getPages()) {
+    const { width, height } = p.getSize();
+    const [embedded] = await out.embedPages([p]);
+
+    // Escalamos lo mínimo para que entre la etiqueta + header sin cortar
+    const s = Math.min(1, (height - header) / height);
+    const drawW = width * s;
+    const drawH = height * s;
+
+    // Centramos horizontal; dejamos "header" arriba y pegamos el contenido más abajo
+    const x = (width - drawW) / 2;
+    const y = height - header - drawH;
+
+    const page = out.addPage([width, height]);
+    page.drawPage(embedded, { x, y, width: drawW, height: drawH });
+  }
+  return out.save();
+}
+
+
+
 // Fix de NETO si hay "PRECIO FINAL" o "Precio Final"
 function fixRowNETO(row){
   const pfIdxUpper = HEADERS.indexOf('PRECIO FINAL');
@@ -424,34 +459,57 @@ async function getShipmentItemsList(shipmentId, token) {
   return Array.isArray(data) ? data : [];
 }
 
-// === Construye el texto de agregados para un shipment mirando:
-//     1) Cada item_id (MLA…)
-//     2) (fallback) Algún order_id del shipment
+// Helper: si qty>1, anteponer "(qty) " a cada agregado del texto.
+function prefixEachItemWithQty(raw, qty) {
+  const q = Number(qty) || 1;
+  if (q <= 1) return String(raw || '');
+  // Usamos el mismo criterio de split que la grilla (• ; | o ", " evitando 7,7)
+  const parts = String(raw || '')
+    .replace(/\r?\n/g, '\n')
+    .split(/(?:\n|[•;|]|\s*,\s+(?!\d))/g)
+    .map(s => s.trim())
+    .filter(Boolean);
+  if (!parts.length) return `(${q}) ${String(raw || '')}`;
+  return parts.map(p => `(${q}) ${p}`).join(' • ');
+}
+
 async function buildAddonsTextForShipment(shipmentId, token) {
   const items = await getShipmentItemsList(shipmentId, token);
   const addonsMap = await getAddonsMapFromSheetsCached();
 
-  const texts = [];
-  const seen = new Set();
-
-  // 1) Por item_id (tu caso: claves MLA de la planilla)
+  // 1) Por item_id: acumulamos cantidades por texto base
+  const qtyByText = new Map(); // baseText -> total qty
+  const seenBase  = new Set();
   for (const it of items) {
-    const k = (it?.item_id || '').toString().trim();
-    if (!k) continue;
-    const t = addonsMap[k];
-    if (t && !seen.has(t)) { texts.push(t); seen.add(t); }
+    const key = String(it?.item_id || '').trim();
+    if (!key) continue;
+    const baseText = addonsMap[key];
+    if (!baseText) continue;
+    const qty = Number(it?.quantity) || 1;
+    qtyByText.set(baseText, (qtyByText.get(baseText) || 0) + qty);
+    seenBase.add(baseText);
   }
 
-  // 2) Fallback: por order_id (por si en algún caso usás ID de venta como clave)
+  // 2) Armamos la lista final (si qty>1, anotamos cada ítem con "(qty)")
+  const texts = [];
+  for (const [baseText, qty] of qtyByText.entries()) {
+    texts.push(qty > 1 ? prefixEachItemWithQty(baseText, qty) : baseText);
+  }
+
+  // 3) Fallback por order_id (estos suelen ser “por venta completa”, no multiplicamos)
   for (const it of items) {
-    const k = (it?.order_id || '').toString().trim();
-    if (!k) continue;
-    const t = addonsMap[k];
-    if (t && !seen.has(t)) { texts.push(t); seen.add(t); }
+    const key = String(it?.order_id || '').trim();
+    if (!key) continue;
+    const t = addonsMap[key];
+    if (t && !seenBase.has(t) && !texts.includes(t)) {
+      texts.push(t);
+      seenBase.add(t);
+    }
   }
 
   return texts.join(' • ');
 }
+
 
 
 // === Dibuja los agregados en cada página de la etiqueta (fuera del recuadro)
@@ -464,7 +522,7 @@ async function overlayAddonsOnPdf(pdfBytes, text) {
 
   // Ajustes simples: margen y tamaño de texto
   const margin = 20;
-  const fontSize = 10;
+  const fontSize = 12;
 
   for (const page of pages) {
     const { width, height } = page.getSize();
@@ -476,7 +534,7 @@ async function overlayAddonsOnPdf(pdfBytes, text) {
       font,
       color: rgb(0, 0, 0), // negro
       maxWidth: width - margin * 2,
-      lineHeight: 12
+      lineHeight: 25
     });
   }
 
@@ -486,10 +544,10 @@ async function overlayAddonsOnPdf(pdfBytes, text) {
 async function overlayAddonsOnPdfGrid(pdfBytes, textos, opts = {}) {
   const cols   = Number(opts.cols ?? 3);
   const left   = Number(opts.left ?? 24);
-  const yBase  = Number(opts.y ?? 120);   // ajustá desde el endpoint si querés
+  const yBase  = Number(opts.y ?? 50);   // ajustá desde el endpoint si querés
   const colGap = Number(opts.colGap ?? 12);
   const padX = 6, padY = 4;
-  const fontSize = 10;
+  const fontSize = 12;
   const lineGap  = 2;
 
   const pdf = await PDFDocument.load(pdfBytes);
@@ -548,8 +606,9 @@ async function overlayAddonsOnPdfGrid(pdfBytes, textos, opts = {}) {
         if (lines.length) wrapped.push({ lines });
       }
 
-      const itemsLinesCount = wrapped.reduce((acc, w) => acc + w.lines.length, 0);
-      const textBlockHeight = Math.max(lineHeight, itemsLinesCount * lineHeight);
+        const itemsLinesCount = wrapped.reduce((acc, w) => acc + w.lines.length, 0);
+      // +1 línea por el título "Incluye:"
+      const textBlockHeight = (1 + itemsLinesCount) * lineHeight;
       const boxHeight = textBlockHeight + padY * 2;
 
       const xLeft = left + c * (colWidth + colGap);
@@ -606,7 +665,7 @@ async function overlayAddonsOnPdfPerPage(pdfBytes, textosPorPagina, opts = {}) {
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
 
-  const fontSize = 10;           // tamaño del texto de “agregados”
+  const fontSize = 15;           // tamaño del texto de “agregados”
   const lineGap  = 2;            // separación entre líneas
   const padX = 6, padY = 4;      // padding del recuadro de fondo
 
@@ -1258,95 +1317,100 @@ rows.push({
  
 
 
+// === Handler común: genera el PDF final con header y overlay ===
+async function generateLabelsPdf(shipIds) {
+  if (!Array.isArray(shipIds) || !shipIds.length) {
+    throw new Error('shipment_ids vacío');
+  }
 
-app.get('/ml/labels/print', async (req, res) => {
-  try {
-    // 1) IDs de shipments (1..3)
-    const idsParam = String(req.query.ids || req.query.id || '').trim();
-    if (!idsParam) return res.status(400).send('Falta shipment_id');
+  // Límite por tanda
+  const MAX_PER_BATCH = 30;
+  if (shipIds.length > MAX_PER_BATCH) {
+    throw new Error(`Máximo ${MAX_PER_BATCH} etiquetas por impresión`);
+  }
 
-   const shipIds = idsParam.split(',').map(s => s.trim()).filter(Boolean);
+  // 1) Token y PDF base ML
+  const token = await getTokenFromSheetsCached();
+  const idsParam = shipIds.map(String).filter(Boolean).join(',');
+  const url = `https://api.mercadolibre.com/shipment_labels?shipment_ids=${encodeURIComponent(idsParam)}&response_type=pdf`;
+  const r = await axios.get(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    responseType: 'arraybuffer',
+    timeout: 20000,
+  });
+  let pdfBytes = Buffer.isBuffer(r.data) ? r.data : Buffer.from(r.data);
 
-// nuevo límite (subilo cuando quieras)
-const MAX_PER_BATCH = 30;
-if (shipIds.length > MAX_PER_BATCH) {
-  return res.status(400).send(`Máximo ${MAX_PER_BATCH} etiquetas por impresión`);
+  // 2) Header arriba para ganar espacio y poder ubicar “Incluye” encima
+  pdfBytes = await repackPdfWithTopHeader(pdfBytes, 72); // probá 64–96
+
+  // 3) Textos por shipment (saltear si ML ya lista “Productos”)
+  const textos = [];
+  for (const sid of shipIds) {
+    try {
+      const items = await getShipmentItemsList(sid, token);
+      const totalUnits = items.reduce((a, it) => a + (Number(it?.quantity) || 0), 0);
+      const distinctItems = new Set(items.map(it => String(it?.item_id || '').trim())).size;
+      const mlYaListaProductos = (totalUnits > 1) || (distinctItems > 1);
+
+      const t = mlYaListaProductos ? '' : await buildAddonsTextForShipment(sid, token);
+      textos.push(t || '');
+    } catch (e) {
+      console.warn('[addons] no se pudo obtener para shipment', sid, e?.message);
+      textos.push('');
+    }
+  }
+
+  // 4) Overlay arriba (y grande = más arriba)
+  const outBytes = await overlayAddonsOnPdfGrid(pdfBytes, textos, {
+    cols: 3,
+    left: 50,
+    y: 510,     // subí/bajá a gusto (300 ≈ bien arriba)
+    colGap: 12,
+    fontSize: 11,
+    lineGap: 3,
+  });
+
+  return Buffer.from(outBytes);
 }
 
+// === GET /ml/labels/print?ids=123,456 ===
+app.get('/ml/labels/print', async (req, res) => {
+  try {
+    const idsParam = String(req.query.ids || req.query.id || '').trim();
+    if (!idsParam) return res.status(400).send('Falta shipment_id');
+    const shipIds = idsParam.split(',').map(s => s.trim()).filter(Boolean);
 
-    // 2) Token
-    const token = await getTokenFromSheetsCached();
-
-    // 3) Descargar PDF base desde ML
-    const url = `https://api.mercadolibre.com/shipment_labels?shipment_ids=${encodeURIComponent(idsParam)}&response_type=pdf`;
-    const r = await axios.get(url, {
-      headers: { Authorization: `Bearer ${token}` },
-      responseType: 'arraybuffer',
-      timeout: 20000,
-    });
-    const pdfBytes = Buffer.isBuffer(r.data) ? r.data : Buffer.from(r.data);
-
-    // 4) Construir textos (agregados) para CADA shipment en orden
-    const textos = [];
-    for (const sid of shipIds) {
-      try {
-        const t = await buildAddonsTextForShipment(sid, token);
-        textos.push(t || '');
-      } catch (e) {
-        console.warn('[addons] no se pudo obtener para shipment', sid, e?.message);
-        textos.push('');
-      }
-    }
-
-    // 5) Estampar 1 texto por página (página i => textos[i])
-    const pdfOut = await overlayAddonsOnPdfGrid(pdfBytes, textos, {
-  cols: 3,      // 3 columnas por hoja
-  left: 50,     // margen izquierdo
-  y: 120,        // altura desde el borde inferior de la hoja (subilo si lo querés más arriba)
-  colGap: 12,   // separación entre columnas
-});
-
-    // 6) Responder PDF (dejalo igual)
+    const pdfBuf = await generateLabelsPdf(shipIds);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="etiquetas.pdf"');
-    res.send(Buffer.from(pdfOut));
+    res.send(pdfBuf);
   } catch (e) {
-    const status = e?.response?.status || 500;
-    const detail = e?.response?.data || String(e?.message || e);
-    console.error('/ml/labels/print error', status, detail);
-    res.status(status).json({ error: 'print_failed', detail });
+    const msg = e?.response?.data || e.message || 'error';
+    const code = e?.response?.status || 500;
+    console.error('/ml/labels/print GET error', code, msg);
+    res.status(code).json({ error: 'print_failed', detail: msg });
   }
 });
 
-
-
-
-
+// === POST /ml/labels/print  body: { "shipment_ids": ["123","456"] } ===
 app.post('/ml/labels/print', requireRole(['ENVIOS','ADMIN']), async (req, res) => {
   try {
     const list = Array.isArray(req.body?.shipment_ids) ? req.body.shipment_ids : [];
-    const idsParam = list.map(String).filter(Boolean).join(',');
-    if (!idsParam) return res.status(400).json({ error:'bad_request', message:'shipment_ids vacío' });
+    const shipIds = list.map(String).filter(Boolean);
+    if (!shipIds.length) return res.status(400).json({ error:'bad_request', message:'shipment_ids vacío' });
 
-    const token = await getTokenFromSheetsCached();
-    const url = `https://api.mercadolibre.com/shipment_labels?shipment_ids=${encodeURIComponent(idsParam)}&response_type=pdf`;
-
-    const r = await axios.get(url, {
-      headers: { Authorization: `Bearer ${token}` },
-      responseType: 'arraybuffer',
-      timeout: 20000,
-    });
-
+    const pdfBuf = await generateLabelsPdf(shipIds);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="etiquetas.pdf"');
-    res.send(Buffer.from(r.data));
+    res.send(pdfBuf);
   } catch (e) {
-    const status = e?.response?.status || 500;
-    const detail = e?.response?.data || e.message;
-    console.error('/ml/labels/print error', status, detail);
-    res.status(status).json({ error: 'print_failed', detail });
+    const msg = e?.response?.data || e.message || 'error';
+    const code = e?.response?.status || 500;
+    console.error('/ml/labels/print POST error', code, msg);
+    res.status(code).json({ error: 'print_failed', detail: msg });
   }
 });
+
 
 // ====== /orders (core de ventas + reglas de envío)
 app.get('/orders', async (req, res) => {
@@ -1687,4 +1751,6 @@ const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => {
   console.log(`ML backend listo en http://localhost:${PORT}`);
 });
+
+
 
