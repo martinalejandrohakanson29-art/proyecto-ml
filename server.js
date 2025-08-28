@@ -9,13 +9,15 @@ import session from 'express-session';
 import compression from 'compression';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
-
-
-
 // ===== Config de comportamiento (flags de debug)
 const IN_PROD = process.env.NODE_ENV === 'production';
 const DEBUG_ORDERS = process.env.DEBUG_ORDERS === '1';
 const DEBUG_PAYMENTS = process.env.DEBUG_PAYMENTS === '1';
+// ===== Cargo/NETO: modo de cálculo y salida
+const CARGO_SOURCE = (process.env.CARGO_SOURCE || 'auto').toLowerCase();      // 'fees' | 'residual' | 'auto'
+const PRORRATEO_UNIDADES = (process.env.PRORRATEO_UNIDADES || 'true') === 'true';
+const CARGO_OUT_MODE = (process.env.CARGO_OUT_MODE || 'percent').toLowerCase(); // 'percent' | 'amount' | 'both'
+
 // Silenciar logs con prefijo "[tax]" si no está activado DEBUG_PAYMENTS
 if (!DEBUG_PAYMENTS) {
   const _origLog = console.log;
@@ -83,6 +85,126 @@ const mpAxios = axios.create({
   httpsAgent: httpsAgentKeepAlive,
 });
 
+
+// === % Cargo x venta = P + Q (desde ML listing_prices) ======================
+const _feesCache = new Map();
+function _getCachedFee(key){
+  const e = _feesCache.get(key);
+  return e && Date.now() < e.exp ? e.val : null;
+}
+function _setCachedFee(key, val, ms = 10 * 60 * 1000){
+  _feesCache.set(key, { val, exp: Date.now() + ms });
+}
+
+/**
+ * Calcula P + Q en % para un item:
+ *  P = meli_percentage_fee
+ *  Q = financing_add_on_fee (según tags/campañas)
+ *  - No incluye impuestos.
+ */
+async function computePPlusQ({ itemId, token, priceHint = 0 }) {
+  if (!itemId || !token) return 0;
+
+  // Cache por item + precio redondeado (fee puede variar por tipo/escala)
+  const cacheKey = `pq:${itemId}|${Math.round(Number(priceHint) || 0)}`;
+  const cached = _getCachedFee(cacheKey);
+  if (cached != null) return cached;
+
+  // 1) /items → listing_type_id, domain_id, tags
+  let listing_type_id = 'gold_special', domain_id = '', tags = [];
+  let precioBase = 0;
+  try {
+    const { data: item } = await meliAxios.get(`/items/${itemId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    listing_type_id = item?.listing_type_id || listing_type_id;
+    domain_id       = item?.domain_id || '';
+    tags            = Array.isArray(item?.tags) ? item.tags : [];
+
+    // 2) /items/{id}/prices?context=channel_marketplace → precio base
+    try {
+      const { data: prices } = await meliAxios.get(`/items/${itemId}/prices`, {
+        params: { context: 'channel_marketplace' },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const arr = Array.isArray(prices?.prices) ? prices.prices : [];
+      const promo = arr.find(p => p.type === 'promotion' && p?.conditions?.context_restrictions?.includes('channel_marketplace'));
+      if (promo) {
+        precioBase = Number(promo.regular_amount ?? promo.amount ?? 0);
+      } else {
+        const std = arr.find(p => p.type === 'standard' && p?.conditions?.context_restrictions?.includes('channel_marketplace'));
+        if (std) precioBase = Number(std.amount ?? 0);
+      }
+    } catch {}
+
+    if (!precioBase && (item?.original_price || item?.price)) {
+      precioBase = Number(item.original_price || item.price || 0) || 0;
+    }
+  } catch {
+    // si falla /items, seguimos con hints
+  }
+
+  if (!precioBase && priceHint) precioBase = Number(priceHint) || 0;
+
+  // 3) Q rápido por tags especiales
+  let Q = null;
+  if (tags.includes('pcj-co-funded')) Q = 4;
+  else if (tags.includes('pcj-buyer-funded')) Q = 0;
+
+  // 4) Tag de campaña si aplica (para cuotas “cuota simple”, 3x/9x/12x, etc.)
+  const tagsCampanas = [
+    'cuota-simple-3', 'cuota-simple-6', 'cuota-simple-12',
+    '3x_campaign', '9x_campaign', '12x_campaign',
+    'mshops_cuota-simple-3', 'mshops_cuota-simple-6',
+    'mshops_3x_campaign', 'mshops_9x_campaign', 'mshops_12x_campaign'
+  ];
+  const tagCampana = tags.find(t => tagsCampanas.includes(t)) || null;
+
+  // 5) /sites/MLA/listing_prices base → P y (fallback Q)
+  const baseParams = {
+    price: precioBase || 0,
+    listing_type_id,
+    ...(domain_id ? { domain_id } : {}),
+  };
+
+  let P = 0;
+  try {
+    const { data } = await meliAxios.get('/sites/MLA/listing_prices', {
+      params: baseParams,
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const feeInfo = Array.isArray(data) ? data[0] : data;
+    P = Number(feeInfo?.sale_fee_details?.meli_percentage_fee) || 0;
+    if (Q == null && typeof feeInfo?.sale_fee_details?.financing_add_on_fee === 'number') {
+      Q = Number(feeInfo.sale_fee_details.financing_add_on_fee);
+    }
+  } catch {}
+
+  // 6) Si hay campaña y Q sigue nulo, consultar con tags
+  if (Q == null && tagCampana) {
+    try {
+      const { data } = await meliAxios.get('/sites/MLA/listing_prices', {
+        params: { ...baseParams, tags: tagCampana },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const feeInfo = Array.isArray(data) ? data[0] : data;
+      if (typeof feeInfo?.sale_fee_details?.financing_add_on_fee === 'number') {
+        Q = Number(feeInfo.sale_fee_details.financing_add_on_fee);
+      }
+    } catch {}
+  }
+
+  if (Q == null) Q = 0;
+
+  const total = Math.round((P + Q + Number.EPSILON) * 100) / 100; // redondeo 2 decimales
+  _setCachedFee(cacheKey, total);
+  return total;
+}
+
+
+
+
+
 // ===== Envíos: reglas y reparto
 const SHIP_FREE_THRESHOLD = Number(process.env.SHIP_FREE_THRESHOLD || 32999);
 const SHIP_RULE_USE_BASE = process.env.SHIP_RULE_USE_BASE !== 'false';
@@ -121,12 +243,21 @@ function parseRangeAR(q) {
   };
 }
 
+// Busca el primer encabezado existente dentro de HEADERS
+function findHeader(...cands) {
+  for (const name of cands) {
+    const i = HEADERS.indexOf(name);
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+
 // ===== Índices de columnas (según HEADERS interno, NO tocar)
 const IDX = {
   ID_VENTA: HEADERS.indexOf('ID DE VENTA'),
   FECHA: HEADERS.indexOf('FECHA'),
   TITULO: HEADERS.indexOf('TITULO'),
-  PRECIO_FINAL_COMPRADOR: HEADERS.indexOf('Precio Final'),
+  PRECIO_FINAL_COMPRADOR: findHeader('Precio Final', 'PRECIO FINAL'),
   NETO: HEADERS.indexOf('NETO'),
   COSTO: HEADERS.indexOf('COSTO'),
   GANANCIA: HEADERS.indexOf('GANANCIA'),
@@ -135,7 +266,8 @@ const IDX = {
   PRECIO_FINAL_SIN_INTERES: HEADERS.indexOf('PRECIO FINAL'),
   ENVIO: HEADERS.indexOf('ENVIO'),
   IMPUESTO: HEADERS.indexOf('IMPUESTO'),
-  CARGO: HEADERS.indexOf('CARGO X VENTA'),
+  // ⬇️ acepta varios alias
+  CARGO: findHeader('CARGO X VENTA', 'CARGO X VENTA $', 'CARGO', 'COMISION', 'COMISIÓN', 'CARGO VENTA'),
   CUOTAS: HEADERS.indexOf('CUOTAS'),
 };
 
@@ -165,9 +297,13 @@ function buildOutputOrder() {
       if (up >= 0) return up;
       return -1;
     }
+    if (name === 'CARGO X VENTA') {
+      return findHeader('CARGO X VENTA', 'CARGO X VENTA $', 'CARGO', 'COMISION', 'COMISIÓN', 'CARGO VENTA');
+    }
     return HEADERS.indexOf(name);
   });
 }
+
 const OUTPUT_IDX = buildOutputOrder();
 function remapRowToDisplay(row) {
   return OUTPUT_IDX.map(i => i >= 0 ? row[i] : '');
@@ -177,6 +313,44 @@ function remapRowToDisplay(row) {
 function toNum(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const round1 = (n) => Math.round((Number(n) + Number.EPSILON) * 10) / 10;
+
+// Nuevo: convierte "$ 12.345,67" → 12345.67, "12,34" → 12.34, "12345.67" → 12345.67
+function toMoney(v){
+  if (typeof v === 'string') {
+    const s0 = v.replace(/\s+/g,'').replace(/[^\d.,-]/g,''); // deja dígitos, . , y -
+    if (s0.includes(',') && s0.includes('.')) {
+      // Asumimos formato ES: . = miles, , = decimales
+      const s1 = s0.replace(/\./g, '').replace(',', '.');
+      const n = Number(s1);
+      if (Number.isFinite(n)) return n;
+    } else if (s0.includes(',')) {
+      // Solo coma: usarla como decimal
+      const n = Number(s0.replace(',', '.'));
+      if (Number.isFinite(n)) return n;
+    } else {
+      // Solo punto o solo dígitos
+      const n = Number(s0);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function cargoPercentFromRow(row) {
+  // usar el mismo criterio global de PF que en el resto del código
+  const { pfAny } = pfIndex();
+  const pf = pfAny >= 0 ? toMoney(row[pfAny]) : 0;
+
+  const envio    = IDX.ENVIO    >= 0 ? toMoney(row[IDX.ENVIO])    : 0;
+  const imp      = IDX.IMPUESTO >= 0 ? toMoney(row[IDX.IMPUESTO]) : 0;
+  const cargoAmt = IDX.CARGO    >= 0 ? Math.abs(toMoney(row[IDX.CARGO])) : 0;
+
+  const baseItems = pf - envio - imp;
+  if (!(baseItems > 0 && cargoAmt > 0)) return 0;
+
+  return round2((cargoAmt / baseItems) * 100);
+}
 
 // === Helper: detectar envío hecho por fuera de MercadoLibre (no ME2 / self_service / retiro / “flex” sin ME2)
 function esEnvioFueraDeML(order, shipment) {
@@ -191,8 +365,6 @@ function esEnvioFueraDeML(order, shipment) {
 
   return noEsME2 || selfService || flexPorFuera;
 }
-
-
 
 /**
  * Agrega un “header” (margen superior) de N puntos a cada página del PDF.
@@ -225,7 +397,14 @@ async function repackPdfWithTopHeader(pdfBytes, header = 72) {
   return out.save();
 }
 
-
+async function mlSearchQuestionsByItem(itemId, limit = 50){
+  const token = await getTokenFromSheetsCached();
+  const { data } = await meliAxios.get('/questions/search', {
+    params: { item: itemId, limit },
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  return Array.isArray(data?.questions) ? data.questions : [];
+}
 
 // Fix de NETO si hay "PRECIO FINAL" o "Precio Final"
 function fixRowNETO(row){
@@ -248,35 +427,53 @@ function fixRowNETO(row){
  * Busca en payments[].fee_details líneas con "iva / impuesto / tax"
  * y usa payments[].taxes_amount si viene. Devuelve { cargoVenta, impuesto, installments }.
  */
+// === Fallback mejorado: separa IMPUESTO y ENVÍO de los fees de MP/ML
 function splitFeesAndTaxesFromPayments(payments = []) {
-  let feeTotal = 0;
-  let taxFromFees = 0;
-  let taxesAmountField = 0;
+  let feeTotalAbs = 0;        // suma de todos los fees (positivo)
+  let taxFromFeesAbs = 0;     // parte impositiva detectada en fee_details (positivo)
+  let taxesAmountField = 0;   // taxes_amount directo del pago (si viene)
+  let shippingFeeAbs = 0;     // cargos de envío/logística encontrados en fee_details
   let installments = 1;
 
+  const norm = (s) =>
+    String(s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
   for (const p of payments) {
-    if (p && typeof p.installments === 'number') {
-      installments = p.installments || installments;
+    if (p && typeof p.installments === 'number' && p.installments > 0) {
+      installments = p.installments;
     }
     const fds = Array.isArray(p?.fee_details) ? p.fee_details : [];
     for (const fd of fds) {
-      const amt = Number(fd?.amount) || 0;
-      feeTotal += amt;
-      const name = String(fd?.type || fd?.name || '').toLowerCase();
-      if (name.includes('iva') || name.includes('impuesto') || name.includes('tax')) {
-        taxFromFees += amt;
+      const amtAbs = Math.abs(Number(fd?.amount) || 0);
+      feeTotalAbs += amtAbs;
+
+      const name = norm(fd?.type || fd?.name);
+      if (/(iva|impuesto|tax)/.test(name)) {
+        taxFromFeesAbs += amtAbs;
+      } else if (/(envio|shipping|logist)/.test(name)) {
+        // cualquier cosa que parezca “envío/logística” la separamos
+        shippingFeeAbs += amtAbs;
       }
     }
     if (Number(p?.taxes_amount) > 0) {
       taxesAmountField += Number(p.taxes_amount);
     }
   }
-  const impuesto = taxesAmountField > 0 ? taxesAmountField : taxFromFees;
-  const cargoVenta = Math.max(0, round2(feeTotal - taxFromFees));
-  return { cargoVenta: round2(cargoVenta), impuesto: round2(impuesto), installments };
+
+  // Si viene taxes_amount lo priorizamos; si no, tomamos lo detectado en fee_details
+  const impuesto = taxesAmountField > 0 ? round2(taxesAmountField) : round2(taxFromFeesAbs);
+
+  // Cargo de venta NETO (comisión real) = fees totales - impuestos - fees de envío
+  const cargoVenta = Math.max(0, round2(feeTotalAbs - (impuesto || 0) - shippingFeeAbs));
+
+  return { cargoVenta, impuesto, shippingFee: round2(shippingFeeAbs), installments };
 }
 
-// ===== MP taxes (opcional)
+
+// ===== MP taxes (opcional) — devuelve sólo TOTAL de taxes desde MP (como en tu versión original)
 async function computeTaxesFromMercadoPago(payments = []) {
   const mpToken = process.env.MP_ACCESS_TOKEN;
   if (!mpToken) return null;
@@ -510,8 +707,6 @@ async function buildAddonsTextForShipment(shipmentId, token) {
   return texts.join(' • ');
 }
 
-
-
 // === Dibuja los agregados en cada página de la etiqueta (fuera del recuadro)
 async function overlayAddonsOnPdf(pdfBytes, text) {
   if (!text) return pdfBytes; // nada que añadir
@@ -606,7 +801,7 @@ async function overlayAddonsOnPdfGrid(pdfBytes, textos, opts = {}) {
         if (lines.length) wrapped.push({ lines });
       }
 
-        const itemsLinesCount = wrapped.reduce((acc, w) => acc + w.lines.length, 0);
+      const itemsLinesCount = wrapped.reduce((acc, w) => acc + w.lines.length, 0);
       // +1 línea por el título "Incluye:"
       const textBlockHeight = (1 + itemsLinesCount) * lineHeight;
       const boxHeight = textBlockHeight + padY * 2;
@@ -652,9 +847,6 @@ async function overlayAddonsOnPdfGrid(pdfBytes, textos, opts = {}) {
 
   return await pdf.save();
 }
-
-
-
 
 async function overlayAddonsOnPdfPerPage(pdfBytes, textosPorPagina, opts = {}) {
   const yBase = Number(opts.y ?? 24);
@@ -754,8 +946,6 @@ async function overlayAddonsOnPdfPerPage(pdfBytes, textosPorPagina, opts = {}) {
   return await pdf.save();
 }
 
-
-
 // ====== Cache de "Agregados" desde Google Sheets (usa hoja Comparador: A = ID venta, C/E/G/I = agregados)
 let _agregadosCache = { map: {}, exp: 0 };
 
@@ -797,7 +987,6 @@ async function getAgregadoMapFromSheetsCached() {
   return map;
 }
 
-
 async function buildAgregadoSinglePage({ orderId, text }) {
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([595, 842]); // A4
@@ -833,7 +1022,6 @@ async function buildAgregadoSinglePage({ orderId, text }) {
   return await pdf.save();
 }
 
-
 // ===== Búsqueda por ID o Pack (paralelizada)
 async function fetchOrdersByIdsOrPacks(ids = [], sellerId, token) {
   const out = new Map();
@@ -857,10 +1045,11 @@ async function fetchOrdersByIdsOrPacks(ids = [], sellerId, token) {
 
 // ====== Reglas de envío por grupo (shipment/pack)
 function pfIndex() {
-  const up = HEADERS.indexOf('PRECIO FINAL');
-  const lo = HEADERS.indexOf('Precio Final');
-  return { pfUp: up, pfLo: lo, pfAny: (up >= 0 ? up : lo) };
+  const up = HEADERS.indexOf('PRECIO FINAL');   // suele ser "sin interés" o vacío
+  const lo = HEADERS.indexOf('Precio Final');   // el que necesitamos para % cargo
+  return { pfUp: up, pfLo: lo, pfAny: (lo >= 0 ? lo : up) };
 }
+
 function priceForThreshold(row) {
   const { pfAny } = pfIndex();
   const base = toNum(row[IDX.PRECIO_BASE]);
@@ -1253,69 +1442,138 @@ app.get('/ml/labels/pending', requireRole(['ENVIOS','ADMIN']), async (req, res) 
         const status = String(shipment?.status || '').toLowerCase();
         if (!(mode === 'me2' && status === 'ready_to_ship')) continue;
 
-      // tipo de logística + exclusión FULL
-const logisticType = String(
-  shipment?.logistic?.type ??
-  shipment?.logistic_type ??
-  shipment?.shipping_logistic_type ??
-  order?.shipping?.logistic_type ??
-  ''
-).toLowerCase();
-if (logisticType === 'fulfillment') continue;
+        // tipo de logística + exclusión FULL
+        const logisticType = String(
+          shipment?.logistic?.type ??
+          shipment?.logistic_type ??
+          shipment?.shipping_logistic_type ??
+          order?.shipping?.logistic_type ??
+          ''
+        ).toLowerCase();
+        if (logisticType === 'fulfillment') continue;
 
-// === Mapeo simple a FLEX/Colecta según servicio de la API
-const serviceName = String(
-  shipment?.lead_time?.shipping_method?.name || // x-format-new
-  shipment?.shipping_option?.name ||            // fallback legacy
-  ''
-);
+        // === Mapeo simple a FLEX/Colecta según servicio de la API
+        const serviceName = String(
+          shipment?.lead_time?.shipping_method?.name || // x-format-new
+          shipment?.shipping_option?.name ||            // fallback legacy
+          ''
+        );
+        const serviceNorm = serviceName
+          .toLowerCase()
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // sin acentos
+        const isFlex = serviceNorm.includes('prioritario a domicilio'); // <- TU REGLA
+        const methodLabel = isFlex ? 'FLEX' : 'Colecta';
 
-const serviceNorm = serviceName
-  .toLowerCase()
-  .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // sin acentos
+        const created = new Date(order?.date_created || shipment?.date_created || Date.now());
+        const date = `${created.getFullYear()}-${pad(created.getMonth()+1)}-${pad(created.getDate())} ${pad(created.getHours())}:${pad(created.getMinutes())}`;
 
-const isFlex = serviceNorm.includes('prioritario a domicilio'); // <- TU REGLA
-const methodLabel = isFlex ? 'FLEX' : 'Colecta';
+        const buyerNick = order?.buyer?.nickname || '';
+        const buyerName = [order?.buyer?.first_name, order?.buyer?.last_name].filter(Boolean).join(' ');
+        const buyer = (buyerName ? `${buyerName} (@${buyerNick})` : (buyerNick ? `@${buyerNick}` : '—'));
 
-const created = new Date(order?.date_created || shipment?.date_created || Date.now());
-const date = `${created.getFullYear()}-${pad(created.getMonth()+1)}-${pad(created.getDate())} ${pad(created.getHours())}:${pad(created.getMinutes())}`;
+        const items = Array.isArray(order?.order_items)
+          ? order.order_items.map(oi => `${oi?.item?.title || 'Item'} (${oi?.quantity || 1}u)`).join('; ')
+          : '';
 
-const buyerNick = order?.buyer?.nickname || '';
-const buyerName = [order?.buyer?.first_name, order?.buyer?.last_name].filter(Boolean).join(' ');
-const buyer = (buyerName ? `${buyerName} (@${buyerNick})` : (buyerNick ? `@${buyerNick}` : '—'));
-
-const items = Array.isArray(order?.order_items)
-  ? order.order_items.map(oi => `${oi?.item?.title || 'Item'} (${oi?.quantity || 1}u)`).join('; ')
-  : '';
-
-rows.push({
-  orderId: String(order.id),
-  packId:  order?.pack_id ? String(order.pack_id) : null,
-  buyer,
-  date,
-  items,
-  shippingId: String(shippingId),
-  shipmentStatus: status,
-  shipmentSubstatus: String(shipment?.substatus || '').toLowerCase(),
-  logisticType,
-  isFlex,          // true si “Prioritario a domicilio”
-  serviceName,     // nombre crudo por si querés verlo
-  methodLabel      // “FLEX” o “Colecta”
-});
-
+        rows.push({
+          orderId: String(order.id),
+          packId:  order?.pack_id ? String(order.pack_id) : null,
+          buyer,
+          date,
+          items,
+          shippingId: String(shippingId),
+          shipmentStatus: status,
+          shipmentSubstatus: String(shipment?.substatus || '').toLowerCase(),
+          logisticType,
+          isFlex,          // true si “Prioritario a domicilio”
+          serviceName,     // nombre crudo por si querés verlo
+          methodLabel      // “FLEX” o “Colecta”
+        });
       }
     }
 
     res.json({ rows });
-  } catch (err) {
-    const status = err?.response?.status || 500;
-    const detail = err?.response?.data || String(err?.message || err);
-    console.error('/ml/labels/pending error', status, detail);
-    res.status(status).json({ error: 'ml_pending_failed', detail });
+  } catch (e) {
+    console.error('GET /ml/labels/pending failed', e?.response?.status, e?.message);
+    res.status(500).json({ error: 'labels_pending_failed' });
   }
 });
- 
 
+// ====== Preguntas previas por orden (batch)
+app.get('/ml/questions/has-batch', requireRole(['ENVIOS','ADMIN']), async (req, res) => {
+  try {
+    const idsParam = (req.query.order_ids || '').trim();
+    if (!idsParam) return res.json({ ok: true, map: {} });
+
+    const orderIds = [...new Set(idsParam.split(',').map(s => s.trim()).filter(Boolean))];
+
+    // auth ML (mismo esquema que en /ml/labels/pending)
+    const token = await getTokenFromSheetsCached();
+    const auth  = { headers: { Authorization: `Bearer ${token}` } };
+
+    // Helper local: preguntas por item
+    async function getItemQuestions(itemId, limit = 50) {
+      const { data } = await meliAxios.get('/questions/search', {
+        params: { item: itemId, limit },
+        ...auth,
+      });
+      return Array.isArray(data?.questions) ? data.questions : [];
+    }
+
+    // 1) Traer cada orden para conocer buyer, fecha e items
+    const orders = await Promise.all(orderIds.map(async (oid) => {
+      const { data } = await meliAxios.get(`/orders/${encodeURIComponent(oid)}`, auth);
+      return data;
+    }));
+
+    const infoByOrder   = new Map();
+    const uniqueItemIds = new Set();
+
+    for (const o of orders) {
+      const buyerId = o?.buyer?.id;
+      const dateStr = o?.date_created || o?.date_closed || o?.date_approved;
+      const date    = dateStr ? new Date(dateStr) : null;
+      const itemIds = (Array.isArray(o?.order_items) ? o.order_items : [])
+        .map(oi => oi?.item?.id).filter(Boolean);
+
+      itemIds.forEach(id => uniqueItemIds.add(id));
+      infoByOrder.set(String(o?.id), { buyerId, date, itemIds });
+    }
+
+    // 2) Descargar preguntas por ítem (una sola vez por item)
+    const questionsByItem = new Map();
+    await Promise.all([...uniqueItemIds].map(async (itemId) => {
+      try {
+        questionsByItem.set(itemId, await getItemQuestions(itemId, 50));
+      } catch {
+        questionsByItem.set(itemId, []); // tolerante a errores por ítem
+      }
+    }));
+
+    // 3) Para cada orden, ¿hay pregunta del mismo buyer ANTES de la compra?
+    const map = {};
+    for (const [oid, info] of infoByOrder) {
+      const { buyerId, date, itemIds } = info;
+      let has = false;
+
+      if (buyerId && date && itemIds.length) {
+        for (const it of itemIds) {
+          const qs = questionsByItem.get(it) || [];
+          if (qs.some(q =>
+            String(q?.from?.id) === String(buyerId) &&
+            q?.date_created && new Date(q.date_created) <= date
+          )) { has = true; break; }
+        }
+      }
+      map[oid] = has;
+    }
+
+    res.json({ ok: true, map });
+  } catch (e) {
+    console.error('GET /ml/questions/has-batch failed', e?.response?.status, e?.message);
+    res.status(500).json({ ok: false, error: 'questions_batch_failed' });
+  }
+});
 
 // === Handler común: genera el PDF final con header y overlay ===
 async function generateLabelsPdf(shipIds) {
@@ -1410,7 +1668,6 @@ app.post('/ml/labels/print', requireRole(['ENVIOS','ADMIN']), async (req, res) =
     res.status(code).json({ error: 'print_failed', detail: msg });
   }
 });
-
 
 // ====== /orders (core de ventas + reglas de envío)
 app.get('/orders', async (req, res) => {
@@ -1551,35 +1808,53 @@ app.get('/orders', async (req, res) => {
 
       // Row base (en orden HEADERS)
       const row = mapOrderToGridRow(order, payments, shipmentData, costsMap);
+      if (toNum(row[IDX.CARGO]) < 0) {
+        row[IDX.CARGO] = round2(Math.abs(toNum(row[IDX.CARGO])));
+      }
 
       // Fallback: separar IMPUESTO de CARGO mirando fee_details/taxes_amount
-      const { cargoVenta, impuesto } = splitFeesAndTaxesFromPayments(payments);
+      const { cargoVenta, impuesto, shippingFee, installments } = splitFeesAndTaxesFromPayments(payments);
+
       const cargoRow = toNum(row[IDX.CARGO]);
-      const impRow   = toNum(row[IDX.IMPUESTO]);
+const impRow   = toNum(row[IDX.IMPUESTO]);
 
-      if (impuesto > 0 && impRow <= 0) {
-        if (cargoRow >= impuesto) {
-          row[IDX.CARGO]    = round2(cargoRow - impuesto);
-          row[IDX.IMPUESTO] = round2(impuesto);
-        } else {
-          row[IDX.IMPUESTO] = round2(impuesto);
-        }
-      }
+      // 1) Si detectamos impuesto en pagos y la columna IMPUESTO está vacía, poblarla
+if (impuesto > 0 && impRow <= 0) {
+  if (cargoRow >= impuesto) {
+    row[IDX.CARGO]    = round2(cargoRow - impuesto);
+    row[IDX.IMPUESTO] = round2(impuesto);
+  } else {
+    row[IDX.IMPUESTO] = round2(impuesto);
+  }
+}
 
-      // ===== AJUSTE: si el envío es por fuera de ML → ENVIO = 0
-      try {
-        if (esEnvioFueraDeML(order, shipmentData)) {
-          row[IDX.ENVIO] = 0;
-        }
-      } catch {}
+     // 2) Si CARGO está vacío pero de payments sacamos cargoVenta ($), escribirlo
+if (toNum(row[IDX.CARGO]) <= 0 && cargoVenta > 0) {
+  row[IDX.CARGO] = round2(cargoVenta);
+}
 
-      // Recalcular NETO y % ganancia
-      fixRowNETO(row);
-      const cost = toNum(row[IDX.COSTO]);
-      const neto = toNum(row[IDX.NETO]);
-      if (cost > 0 && neto && IDX.GANANCIA >= 0) {
-        row[IDX.GANANCIA] = round1(((neto - cost) / cost) * 100);
-      }
+      if (shippingFee > 0) {
+  if (toNum(row[IDX.ENVIO]) <= 0) {
+    row[IDX.ENVIO] = round2(toNum(row[IDX.ENVIO]) + shippingFee);
+  }
+  row[IDX.CARGO] = round2(Math.max(0, toNum(row[IDX.CARGO]) - shippingFee));
+}
+if (IDX.CUOTAS >= 0 && Number(installments) > 0) {
+  row[IDX.CUOTAS] = installments;
+}
+      // Recalcular NETO en base a los nuevos montos
+     // Recalcular NETO en base a los nuevos montos
+fixRowNETO(row);
+
+// % GANANCIA (una sola vez)
+{
+  const cost = toNum(row[IDX.COSTO]);
+  const neto = toNum(row[IDX.NETO]);
+  if (cost > 0 && neto && IDX.GANANCIA >= 0) {
+    row[IDX.GANANCIA] = round1(((neto - cost) / cost) * 100);
+  }
+}
+
 
       // ——— DEBUG PAYMENTS (opcional)
       if (DEBUG_PAYMENTS) {
@@ -1622,15 +1897,51 @@ app.get('/orders', async (req, res) => {
       return (ms >= baseFromMs && ms <= baseToMs);
     });
 
+   // CARGO X VENTA (%) = P + Q (sin impuestos)
+// Nota: usamos el primer ítem de la orden para calcular el % (mismo criterio que en Sheets).
+for (const it of inRange) {
+  try {
+    const firstItemId =
+      it?.order?.order_items?.[0]?.item?.id ||
+      it?.order?.packages?.[0]?.items?.[0]?.id ||
+      null;
+
+    // Intentamos pasar un precio base “hint” desde la fila (PRECIO BASE),
+    // y si no, usamos el Precio Final visible como respaldo.
+    const { pfAny } = pfIndex?.() || { pfAny: -1 };
+    const precioHint =
+      (IDX.PRECIO_BASE >= 0 ? Number(it.row[IDX.PRECIO_BASE] || 0) : 0) ||
+      (pfAny >= 0 ? Number(it.row[pfAny] || 0) : 0) ||
+      0;
+
+    if (firstItemId) {
+      const pct = await computePPlusQ({ itemId: firstItemId, token, priceHint: precioHint });
+      it.row[IDX.CARGO] = pct;        // ← ahora “CARGO X VENTA” es % = P+Q
+    } else {
+      // Fallback ultra conservador: si no hay item_id, dejamos 0 (o podés dejar el cálculo previo)
+      it.row[IDX.CARGO] = 0;
+    }
+  } catch {
+    it.row[IDX.CARGO] = 0;
+  }
+}
+
+
+    // Armar salida
     const rowsHead = inRange.map(it => it.row);
-    const rowsOut = rowsHead.map(remapRowToDisplay);
+    const rowsOut  = rowsHead.map(remapRowToDisplay);
+
+    const headersOut = DISPLAY_HEADERS.slice();
+    const iCargo = headersOut.indexOf('CARGO X VENTA');
+    if (iCargo >= 0) headersOut[iCargo] = 'CARGO X VENTA %';
 
     res.json({
-      headers: DISPLAY_HEADERS,
+      headers: headersOut,
       from: fromYMD, to: toYMD, dateBy,
       count: rowsOut.length,
       rows: rowsOut
     });
+
   } catch (err) {
     console.error('[orders] error:', err);
     res.status(500).json({ error: err?.message || 'Internal error' });
@@ -1751,6 +2062,3 @@ const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => {
   console.log(`ML backend listo en http://localhost:${PORT}`);
 });
-
-
-
