@@ -104,11 +104,42 @@
   overflow: hidden;      /* recorta dentro del borde redondeado */
   border-radius: 10px;
 }
+
+
+
 .tableWrap .mosaicBg{
   position: absolute; inset: 0;
   background: repeating-linear-gradient(45deg, rgba(255,255,255,.03) 0 6px, transparent 6px 12px);
   pointer-events: none;
 }
+
+/* Grid de filas/encabezado de la tabla de Envíos */
+.labels-grid{
+  display: grid;
+  grid-template-columns: 34px minmax(240px,2fr) minmax(170px,1.2fr) minmax(140px,1.1fr)
+                         minmax(140px,1.1fr) minmax(220px,1.6fr) minmax(120px,0.9fr) minmax(160px,1fr);
+  gap: 12px;
+  padding: 10px 12px;
+}
+.labels-row{ border-bottom:1px solid rgba(255,255,255,.06); }
+.labels-head{ border-bottom:1px solid var(--line); }
+/* Mejora de legibilidad para la toolbar de Envíos */
+.toolbar label{
+  color: var(--text);
+  font-size: 13px;
+}
+/* Badge preguntas en Envíos */
+.q-flag{
+  display:inline-block;
+  margin-right:6px;
+  font-size:14px;
+  vertical-align:middle;
+}
+.q-flag.warn{
+  filter: drop-shadow(0 0 4px rgba(255,200,0,.35));
+}
+
+
 
 
     /* ===== Login overlay ===== */
@@ -322,7 +353,9 @@
           <button id="labels-load">Cargar pedidos</button>
           <label><input type="checkbox" id="labels-select-all"> Seleccionar todo</label>
           <button id="labels-print" disabled>Imprimir seleccionados</button>
-          <label style="margin-left:auto"><input type="checkbox" id="labels-add-slip" checked> Añadir agregado (2da página)</label>
+         
+          <label><input type="checkbox" id="labels-hide-printed"> Ocultar impresas</label>
+
         </div>
 
         <div id="labels-table" class="table"></div>
@@ -439,6 +472,16 @@
       for (let i = parts.length - 3; i > 0; i -= 3) parts.splice(i, 0, '.');
       return `${sign}$ ${parts.join('')}`;
     }
+
+
+    function fmtPercent(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return '';
+  return n.toFixed(2) + '%';  // 2 decimales
+}
+
+
+
     function fmtPct1(n){
       const num = Number(n);
       if (!Number.isFinite(num)) return '';
@@ -463,7 +506,7 @@
         DESCUENTO_PCT: find('% DESCUENTO'),
         ENVIO: find('ENVIO'),
         IMPUESTO: find('IMPUESTO'),
-        CARGO: find('CARGO X VENTA'),
+        CARGO: (()=>{ const i = H.indexOf('CARGO X VENTA %'); return i>=0 ? i : H.indexOf('CARGO X VENTA'); })(),
         CUOTAS: find('CUOTAS'),
         ID: find('ID DE VENTA'),
         FECHA: find('FECHA'),
@@ -512,49 +555,83 @@
         $('#csvBtn').href = `/orders.csv?${qs.toString()}&fmt=excel&locale=latam`;
 
         const thead = $('#thead'); thead.innerHTML = '';
-        (data.headers || []).forEach(h => { const th = document.createElement('th'); th.textContent = h; thead.appendChild(th); });
+(data.headers || []).forEach(h => { 
+  const th = document.createElement('th'); 
+  th.textContent = h; 
+  thead.appendChild(th); 
+});
 
-        const tbody = $('#tbody'); tbody.innerHTML = '';
-        const rows = Array.isArray(data.rows) ? data.rows : [];
-        const H = data.headers || [];
-        const I = idxFromHeaders(H);
+const ths = thead.querySelectorAll('th');   // ← ← ← AÑADIR ESTA LÍNEA
+
+const tbody = $('#tbody'); tbody.innerHTML = '';
+const rows = Array.isArray(data.rows) ? data.rows : [];
+const H = data.headers || [];
+const I = idxFromHeaders(H);
+
+if (I?.CARGO >= 0 && ths[I.CARGO]) {
+  ths[I.CARGO].textContent = 'CARGO %';
+  ths[I.CARGO].title = 'P (comisión ML) + Q (financiación). No incluye impuestos.';
+}
+
+
+
+
+
 
         // Conjuntos por tipo de dato
-        const moneyIdx = new Set([I.PRECIO_FINAL, I.NETO, I.COSTO, I.PRECIO_BASE, I.ENVIO, I.IMPUESTO, I.CARGO]);
+const moneyIdx = new Set([I.PRECIO_FINAL, I.NETO, I.COSTO, I.PRECIO_BASE, I.ENVIO, I.IMPUESTO]);
         const pctIdx   = new Set([I.GANANCIA_PCT, I.DESCUENTO_PCT]);
 
         let sumNeto = 0, sumCosto = 0, sumPct = 0, pctCount = 0;
 
-        rows.forEach((row, idx) => {
-          const tr = document.createElement('tr');
-          tr.dataset.key = `${row[I.TITULO] ?? ''}|${row[I.PRECIO_FINAL] ?? ''}|${idx}`;
+       rows.forEach((row, idx) => {
+  const tr = document.createElement('tr');
+  tr.dataset.key = `${row[I.TITULO] ?? ''}|${row[I.PRECIO_FINAL] ?? ''}|${idx}`;
 
-          row.forEach((cell, j) => {
-            const td = document.createElement('td');
-            if (j === I.ID){
-              td.textContent = String(cell ?? '');
-              td.style.fontFamily = 'ui-monospace, monospace';
-            } else if (moneyIdx.has(j)){
-              td.textContent = fmtMoneyARS0(cell);
-              td.style.textAlign = 'right';
-            } else if (pctIdx.has(j)){
-              const p = Number(cell);
-              td.textContent = fmtPct1(p);
-              td.style.textAlign = 'right';
-              if (j === I.GANANCIA_PCT){ td.classList.add('pct-cell'); applyPctClass(td, p); }
-            } else {
-              td.textContent = (cell ?? '');
-            }
-            tr.appendChild(td);
-          });
-          tbody.appendChild(tr);
+  row.forEach((cell, j) => {
+  const td = document.createElement('td');
 
-          const neto = Number(row[I.NETO]) || 0;
-          const costo = Number(row[I.COSTO]) || 0;
-          const pct  = Number(row[I.GANANCIA_PCT]);
-          sumNeto += neto; sumCosto += costo;
-          if (Number.isFinite(pct)) { sumPct += pct; pctCount++; }
-        });
+  if (j === I.ID){
+    td.textContent = String(cell ?? '');
+    td.style.fontFamily = 'ui-monospace, monospace';
+
+  
+}
+ else if (j === I.CARGO) {
+  // El backend ya envía "CARGO X VENTA" en porcentaje (p.ej. 12.34)
+  const pct = Number(cell);
+  td.textContent = fmtPct1(pct);
+  td.style.textAlign = 'right';
+  td.classList.add('pct-cell');
+
+  } else if (moneyIdx.has(j)){
+    td.textContent = fmtMoneyARS0(cell);
+    td.style.textAlign = 'right';
+
+  } else if (pctIdx.has(j)){
+    const p = Number(cell);
+    td.textContent = fmtPct1(p);
+    td.style.textAlign = 'right';
+    if (j === I.GANANCIA_PCT){ td.classList.add('pct-cell'); applyPctClass(td, p); }
+
+  } else {
+    td.textContent = (cell ?? '');
+  }
+
+  tr.appendChild(td);
+});
+tbody.appendChild(tr);
+
+const neto = Number(row[I.NETO]) || 0;
+const costo = Number(row[I.COSTO]) || 0;
+const pct  = Number(row[I.GANANCIA_PCT]);
+sumNeto += neto; sumCosto += costo;
+if (Number.isFinite(pct)) { sumPct += pct; pctCount++; }
+
+
+});
+
+
 
         const totalGanancia = sumNeto - sumCosto;
         const promPct = pctCount ? (sumPct / pctCount) : 0;
@@ -755,10 +832,38 @@
         print: document.getElementById('labels-print'),
         addSlip: document.getElementById('labels-add-slip'),
         foot: document.getElementById('labels-foot'),
+        hidePrinted: document.getElementById('labels-hide-printed'),
       };
       if (!el.tab) return;
 
       const state = { rows: [], selected: new Set() };
+
+      
+      // ===== Persistencia local de "impresas" (por shippingId)
+const PRINTED_KEY = 'printed_shipments_v1';
+
+function getPrintedSet() {
+  try {
+    const raw = localStorage.getItem(PRINTED_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(arr.map(String));
+  } catch { return new Set(); }
+}
+
+function savePrintedSet(set) {
+  try { localStorage.setItem(PRINTED_KEY, JSON.stringify(Array.from(set))); } catch {}
+}
+
+function markPrinted(shipmentIds = []) {
+  const set = getPrintedSet();
+  shipmentIds.map(String).forEach(id => set.add(id));
+  savePrintedSet(set);
+}
+
+function isPrinted(shippingId) {
+  return getPrintedSet().has(String(shippingId || ''));
+}
+
 
       function fmtItems(str, max=80){ if (!str) return '—'; return str.length > max ? str.slice(0,max-1) + '…' : str; }
 
@@ -772,40 +877,62 @@ function renderTable() {
     return;
   }
 
-  
-  //           ⬇⬇ columnas: chk   Nombre               IdVenta          Shipping         Fecha           Comprador          Método
-const grid = 'display:grid; grid-template-columns: 34px minmax(240px,2fr) minmax(170px,1.2fr) minmax(140px,1.1fr) minmax(140px,1.1fr) minmax(220px,1.6fr) minmax(120px,0.9fr); gap:12px; padding:10px 12px';
 
 
-  const head = `
-    <div class="tr" style="${grid}; border-bottom:1px solid var(--line)">
-      <div></div>
-      <div><b>Nombre</b></div>
-      <div><b>Id de venta</b></div>
-      <div><b>Shipping</b></div>
-      <div><b>Fecha</b></div>
-      <div><b>Comprador</b></div>
-      <div><b>Método de envío</b></div>
+
+const head = `
+  <div class="tr labels-grid labels-head">
+    <div></div>
+    <div><b>Nombre</b></div>
+    <div><b>Id de venta</b></div>
+    <div><b>Shipping</b></div>
+    <div><b>Fecha</b></div>
+    <div><b>Comprador</b></div>
+    <div><b>Método de envío</b></div>
+    <div><b>Estado etiqueta</b></div>
+  </div>`;
+
+// ⬇⬇ Asegurate de que empiece con "const body = rows.map("
+const body = rows.map(r => {
+  const id = r.orderId;
+  const checked = state.selected.has(id) ? 'checked' : '';
+  const metodoHtml = (r.methodLabel === 'FLEX' || r.isFlex)
+    ? `<span title="${r.serviceName || ''}" style="color:rgb(var(--red-rgb)); font-weight:700">FLEX</span>`
+    : `<span title="${r.serviceName || ''}">Colecta</span>`;
+
+  // TIP: para evitar lío con backticks dentro de backticks,
+  // uso concatenación en la línea del Pack:
+  const packInfo = r.packId
+    ? '<div class="muted" style="font-size:12px">Pack: ' + r.packId + '</div>'
+    : '';
+
+  // NUEVO: flag de preguntas previas
+  const hasQ = !!r.hasQuestions || (r.questionsCount > 0);
+  const preview = (r.questionPreview || '').slice(0, 180);
+  const qTitle = hasQ
+    ? `Tiene ${r.questionsCount || 1} preguntas.\n${preview}`
+    : '';
+  const qFlag = hasQ
+    ? `<span class="q-flag warn" title="${qTitle.replace(/"/g,'&quot;')}">💬</span>`
+    : '';
+
+  return `
+    <div class="tr labels-grid labels-row"
+         data-shipping-id="${r.shippingId || ''}"
+         data-printed="${isPrinted(r.shippingId) ? '1' : '0'}">
+      <div><input type="checkbox" data-rowchk="${id}" ${checked}></div>
+      <div style="overflow-wrap:anywhere" title="${r.items || ''}">${qFlag}${fmtItems(r.items)}</div>
+      <div>#${r.orderId}${packInfo}</div>
+      <div>${r.shippingId || '—'}</div>
+      <div>${r.date || '—'}</div>
+      <div style="overflow-wrap:anywhere">${r.buyer || '—'}</div>
+      <div>${metodoHtml}</div>
+      <div data-col="estado-etiqueta">${isPrinted(r.shippingId) ? 'Impresa' : 'Por imprimir'}</div>
     </div>`;
+}).join('');
 
-  const body = rows.map(r => {
-    const id = r.orderId;
-    const checked = state.selected.has(id) ? 'checked' : '';
-    const metodoHtml = (r.methodLabel === 'FLEX' || r.isFlex)
-      ? `<span title="${r.serviceName || ''}" style="color:rgb(var(--red-rgb)); font-weight:700">FLEX</span>`
-      : `<span title="${r.serviceName || ''}">Colecta</span>`;
 
-    return `
-      <div class="tr" style="${grid}; border-bottom:1px solid rgba(255,255,255,.06)">
-        <div><input type="checkbox" data-rowchk="${id}" ${checked}></div>
-        <div style="overflow-wrap:anywhere" title="${r.items || ''}">${fmtItems(r.items)}</div>
-        <div>#${r.orderId}${r.packId ? `<div class="muted" style="font-size:12px">Pack: ${r.packId}</div>` : ''}</div>
-        <div>${r.shippingId || '—'}</div>
-        <div>${r.date || '—'}</div>
-        <div style="overflow-wrap:anywhere">${r.buyer || '—'}</div>
-        <div>${metodoHtml}</div>
-      </div>`;
-  }).join('');
+
 
   el.table.innerHTML = `
   <div class="tableWrap">
@@ -813,6 +940,7 @@ const grid = 'display:grid; grid-template-columns: 34px minmax(240px,2fr) minmax
     ${head + body}
   </div>
 `;
+
 
 
   // checkboxes
@@ -827,11 +955,24 @@ const grid = 'display:grid; grid-template-columns: 34px minmax(240px,2fr) minmax
 
   syncFooter();
   syncSelectAll();
+  aplicarFiltroOcultarImpresas();
+
 }
 
 
       function syncFooter(){ el.foot.textContent = `${state.selected.size} seleccionados`; el.print.disabled = state.selected.size === 0; }
       function syncSelectAll(){ const total = state.rows.length, sel = state.selected.size; el.selectAll.indeterminate = sel > 0 && sel < total; el.selectAll.checked = sel === total && total > 0; }
+
+function aplicarFiltroOcultarImpresas() {
+  const ocultar = !!el.hidePrinted?.checked;
+  // si aún no hay tabla, salgo
+  if (!el.table) return;
+  el.table.querySelectorAll('.tr[data-printed]').forEach(tr => {
+    const printed = tr.getAttribute('data-printed') === '1';
+    tr.style.display = (ocultar && printed) ? 'none' : '';
+  });
+}
+
 
       el.load.addEventListener('click', async () => {
         el.table.innerHTML = `<div style="opacity:.8"><span class="spinner"></span> Cargando…</div>`;
@@ -841,6 +982,28 @@ const grid = 'display:grid; grid-template-columns: 34px minmax(240px,2fr) minmax
           if (!r.ok) throw new Error('HTTP '+r.status);
           const data = await r.json();
           state.rows = Array.isArray(data.rows) ? data.rows : [];
+          // === NUEVO: consultar al backend cuáles órdenes tienen preguntas previas
+try {
+  const orderIds = state.rows.map(r => r.orderId).filter(Boolean);
+  if (orderIds.length) {
+    const url = `/ml/questions/has-batch?order_ids=${encodeURIComponent(orderIds.join(','))}`;
+    const r2 = await fetch(url, { credentials: 'include' });
+    if (r2.ok) {
+      const { map } = await r2.json(); // { "123": true, "456": false, ... }
+      // Merge: agregamos hasQuestions a cada fila
+      state.rows = state.rows.map(row => ({
+        ...row,
+        hasQuestions: !!map[String(row.orderId)]
+        // (si después extendemos el endpoint con counts/preview, acá sumamos:
+        // questionsCount: map2[String(row.orderId)]?.count || 0,
+        // questionPreview: map2[String(row.orderId)]?.preview || ''
+      }));
+    }
+  }
+} catch (e) {
+  console.warn('questions batch fail', e);
+}
+
         } catch(e){
           console.error(e);
           state.rows = [];
@@ -855,6 +1018,9 @@ const grid = 'display:grid; grid-template-columns: 34px minmax(240px,2fr) minmax
         else state.selected.clear();
         renderTable();
       });
+
+      el.hidePrinted?.addEventListener('change', aplicarFiltroOcultarImpresas);
+
 
     el.print.addEventListener('click', async () => {
   const selectedOrderIds = [...state.selected];
@@ -878,6 +1044,10 @@ const grid = 'display:grid; grid-template-columns: 34px minmax(240px,2fr) minmax
   }
 
   window.open(`/ml/labels/print?ids=${encodeURIComponent(shipIds.join(','))}`, '_blank');
+  markPrinted(shipIds);   // guarda como impresas
+renderTable();          // re-render para que aparezca “Impresa”
+aplicarFiltroOcultarImpresas(); // oculta si el checkbox está activo
+
 });
 
 
@@ -999,4 +1169,3 @@ const grid = 'display:grid; grid-template-columns: 34px minmax(240px,2fr) minmax
   </script>
 </body>
 </html>
-
