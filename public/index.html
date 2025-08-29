@@ -13,14 +13,7 @@
     *{box-sizing:border-box}
     html,body{height:100%}
     body{margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell; background:var(--bg); color:var(--text)}
-    /* antes: .wrap{max-width:1200px; margin:24px auto; padding:0 16px} */
-.wrap{
-  max-width: none;     /* sin límite */
-  width: 100%;
-  margin: 24px 0;      /* sin centrado fijo */
-  padding: 0 clamp(12px, 2vw, 28px); /* borde a los lados adaptable */
-}
-
+    .wrap{max-width:1200px; margin:24px auto; padding:0 16px}
 
     /* ===== Top bar (tabs principales) ===== */
     .topbar{display:flex; align-items:center; justify-content:space-between; padding:10px var(--gap); background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:100}
@@ -49,11 +42,7 @@
     .home-card{padding:18px; border-radius:14px; border:1px solid var(--line); background:rgba(255,255,255,.03)}
     .home-card h3{margin:0 0 8px 0}
     .home-card p{margin:0 0 12px 0; color:var(--muted)}
-    /* antes: .home-grid{grid-template-columns:repeat(2,1fr)} */
-.home-grid{
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-}
-
+    @media (max-width:800px){ .home-grid{grid-template-columns:1fr} }
 
     /* ===== Dashboard ===== */
     .hdr{padding:16px 18px; border-bottom:1px solid var(--line); display:flex; align-items:end; justify-content:space-between; gap:12px; flex-wrap:wrap}
@@ -63,13 +52,7 @@
     .controls{display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap}
     label{font-size:12px; color:var(--muted)}
     .meta{font-size:12px; color:var(--muted); min-height:18px; display:flex; align-items:center; gap:8px}
-   /* antes: .scroller{max-height:58vh; overflow:auto} */
-.scroller{
-  height: calc(100vh - 300px); /* ajustá 300px si te queda corto/largo */
-  max-height: none;
-  overflow: auto;
-}
-
+    .scroller{max-height:58vh; overflow:auto}
     .tbl{width:100%; border-collapse:collapse}
     .tbl th,.tbl td{padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap; font-size:13px}
     .tbl th{position:sticky; top:0; background:var(--panel); z-index:2; text-align:left; font-weight:600; color:#cfe2ff}
@@ -859,6 +842,21 @@ if (Number.isFinite(pct)) { sumPct += pct; pctCount++; }
       // ===== Persistencia local de "impresas" (por shippingId)
 const PRINTED_KEY = 'printed_shipments_v1';
 
+function methodIsFlex(r){
+  const lt = String(r.logisticType || '').toLowerCase();
+  const ml = String(r.methodLabel || '').toUpperCase();
+  const sn = String(r.serviceName || '').toUpperCase();
+
+  // cross_docking nunca es FLEX
+  if (lt === 'cross_docking') return false;
+
+  // marcamos FLEX sólo si los labels lo dicen explícitamente
+  const labelDiceFlex = ml.includes('FLEX') || sn.includes('FLEX');
+  return labelDiceFlex;
+}
+
+
+
 function getPrintedSet() {
   try {
     const raw = localStorage.getItem(PRINTED_KEY);
@@ -913,9 +911,10 @@ const head = `
 const body = rows.map(r => {
   const id = r.orderId;
   const checked = state.selected.has(id) ? 'checked' : '';
-  const metodoHtml = (r.methodLabel === 'FLEX' || r.isFlex)
-    ? `<span title="${r.serviceName || ''}" style="color:rgb(var(--red-rgb)); font-weight:700">FLEX</span>`
-    : `<span title="${r.serviceName || ''}">Colecta</span>`;
+ 
+ const metodoHtml = methodIsFlex(r)
+   ? `<span title="${r.serviceName || ''}" style="color:rgb(var(--red-rgb)); font-weight:700">FLEX</span>`
+   : `<span title="${r.serviceName || ''}">Colecta</span>`;
 
   // TIP: para evitar lío con backticks dentro de backticks,
   // uso concatenación en la línea del Pack:
@@ -1186,3 +1185,4 @@ aplicarFiltroOcultarImpresas(); // oculta si el checkbox está activo
   </script>
 </body>
 </html>
+
