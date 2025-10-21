@@ -651,7 +651,9 @@ if (Number.isFinite(pct)) { sumPct += pct; pctCount++; }
 
 
         const totalGanancia = sumNeto - sumCosto;
-        const promPct = pctCount ? (sumPct / pctCount) : 0;
+        // Promedio % ganancia = (suma de ganancias) / (suma de costos) * 100
+const promPct = (sumCosto > 0) ? ((totalGanancia / sumCosto) * 100) : 0;
+
 
         $('#sumNeto').value     = fmtMoneyARS0(sumNeto);
         $('#sumCosto').value    = fmtMoneyARS0(sumCosto);
